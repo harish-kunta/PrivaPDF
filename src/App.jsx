@@ -1,11 +1,39 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { PDFDocument, rgb } from 'pdf-lib';
+import { PDFDocument } from 'pdf-lib';
 import * as pdfjsLib from 'pdfjs-dist';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
   'pdfjs-dist/build/pdf.worker.min.mjs',
   import.meta.url,
 ).toString();
+
+const createFlattenedPageImage = (pageData) => new Promise((resolve, reject) => {
+  const image = new Image();
+  image.onload = () => {
+    const canvas = document.createElement('canvas');
+    canvas.width = image.naturalWidth;
+    canvas.height = image.naturalHeight;
+
+    const context = canvas.getContext('2d');
+    context.drawImage(image, 0, 0);
+    context.fillStyle = '#000000';
+
+    pageData.redactions
+      .filter((redaction) => !redaction.isPreview)
+      .forEach((redaction) => {
+        context.fillRect(
+          (redaction.x / 100) * canvas.width,
+          (redaction.y / 100) * canvas.height,
+          (redaction.width / 100) * canvas.width,
+          (redaction.height / 100) * canvas.height,
+        );
+      });
+
+    resolve(canvas.toDataURL('image/png'));
+  };
+  image.onerror = () => reject(new Error('Could not rasterize a PDF page.'));
+  image.src = pageData.previewUrl;
+});
 
 function App() {
   const fileInputRef = useRef(null);
@@ -245,39 +273,37 @@ function App() {
 
     try {
       const inputBytes = await pdfFile.file.arrayBuffer();
-      const pdfDoc = await PDFDocument.load(inputBytes);
-      const pageCount = pdfDoc.getPageCount();
+      const sourcePdf = await PDFDocument.load(inputBytes);
+      const flattenedPdf = await PDFDocument.create();
 
-      pages.forEach((pageData, idx) => {
-        if (idx >= pageCount) return;
-        const page = pdfDoc.getPage(idx);
-        const { width, height } = page.getSize();
+      for (let index = 0; index < pages.length; index += 1) {
+        const pageData = pages[index];
+        const sourcePageIndex = Math.min(
+          Math.max(0, pageData.pageNumber - 1),
+          sourcePdf.getPageCount() - 1,
+        );
+        const sourcePage = sourcePdf.getPage(sourcePageIndex);
+        const { width, height } = sourcePage.getSize();
+        const flattenedImage = await createFlattenedPageImage(pageData);
+        const image = await flattenedPdf.embedPng(flattenedImage);
+        const page = flattenedPdf.addPage([width, height]);
 
-        const redactions = pageData.redactions.filter((r) => !r.isPreview);
-        redactions.forEach((box) => {
-          const x = (box.x / 100) * width;
-          const y = height - ((box.y + box.height) / 100) * height;
-          const w = (box.width / 100) * width;
-          const h = (box.height / 100) * height;
-
-          page.drawRectangle({
-            x,
-            y,
-            width: w,
-            height: h,
-            color: rgb(0, 0, 0),
-          });
+        page.drawImage(image, {
+          x: 0,
+          y: 0,
+          width,
+          height,
         });
-      });
+      }
 
-      pdfDoc.setTitle('');
-      pdfDoc.setAuthor('');
-      pdfDoc.setSubject('');
-      pdfDoc.setKeywords([]);
-      pdfDoc.setCreator('');
-      pdfDoc.setProducer('');
+      flattenedPdf.setTitle('');
+      flattenedPdf.setAuthor('');
+      flattenedPdf.setSubject('');
+      flattenedPdf.setKeywords([]);
+      flattenedPdf.setCreator('');
+      flattenedPdf.setProducer('');
 
-      const cleanedPdfBytes = await pdfDoc.save();
+      const cleanedPdfBytes = await flattenedPdf.save();
       const blob = new Blob([cleanedPdfBytes], { type: 'application/pdf' });
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement('a');
@@ -394,8 +420,13 @@ function App() {
         </div>
         <div className="header-right">
           <button onClick={resetWorkspace} className="toolbar-btn secondary">New</button>
-          <button onClick={saveCleanPdf} disabled={processing} className="toolbar-btn primary">
-            {processing ? 'Exporting...' : 'Export PDF'}
+          <button
+            onClick={saveCleanPdf}
+            disabled={processing}
+            className="toolbar-btn primary"
+            title="Creates a flattened PDF with redactions baked into the page images"
+          >
+            {processing ? 'Exporting...' : 'Export Flattened PDF'}
           </button>
         </div>
       </div>
