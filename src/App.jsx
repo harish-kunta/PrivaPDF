@@ -71,6 +71,9 @@ function App() {
   const [pdfName, setPdfName] = useState('');
   const [pages, setPages] = useState([]);
   const [currentPageIndex, setCurrentPageIndex] = useState(0);
+  const [isDrawingMode, setIsDrawingMode] = useState(() => (
+    !window.matchMedia('(pointer: coarse)').matches
+  ));
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState('');
@@ -199,6 +202,7 @@ function App() {
 
   const handleCanvasPointerDown = (event) => {
     if (!pages.length) return;
+    if (!isDrawingMode) return;
     if (event.pointerType === 'mouse' && event.button !== 0) return;
     event.preventDefault();
     const img = event.currentTarget;
@@ -403,7 +407,7 @@ function App() {
   if (pages.length === 0) {
     return (
       <div
-        className="app-container upload-view"
+        className={`app-container upload-view ${!analyticsConsent ? 'has-analytics-consent' : ''}`}
         onDragOver={(e) => {
           e.preventDefault();
           setIsDraggingOver(true);
@@ -560,7 +564,7 @@ function App() {
                 <img
                   src={currentPage.previewUrl}
                   alt={`Page ${currentPageIndex + 1}`}
-                  className="pdf-image"
+                  className={`pdf-image ${isDrawingMode ? 'drawing-enabled' : ''}`}
                   onPointerDown={handleCanvasPointerDown}
                   draggable={false}
                 />
@@ -621,6 +625,15 @@ function App() {
               </button>
             </div>
             <div className="footer-right">
+              <button
+                type="button"
+                className={`toolbar-btn ${isDrawingMode ? 'primary' : ''}`}
+                aria-pressed={isDrawingMode}
+                aria-label={isDrawingMode ? 'Exit redaction drawing mode' : 'Enable redaction drawing mode'}
+                onClick={() => setIsDrawingMode((enabled) => !enabled)}
+              >
+                {isDrawingMode ? 'Done drawing' : 'Draw redactions'}
+              </button>
               <button
                 onClick={() => removePage(currentPageIndex)}
                 className="nav-btn delete"
