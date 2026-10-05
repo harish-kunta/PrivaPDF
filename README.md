@@ -16,7 +16,7 @@ A private, client-side PDF redaction tool that works entirely in your browser. Y
 
 ### Prerequisites
 
-- Node.js (v14 or higher)
+- Node.js (v20 or higher)
 - npm or yarn
 
 ### Installation
@@ -59,6 +59,14 @@ npm run build
 ```bash
 npm preview
 ```
+
+### Run Tests
+
+```bash
+npm test
+```
+
+Tests use Node.js's built-in test runner and require no additional dependencies.
 
 ### Project Structure
 

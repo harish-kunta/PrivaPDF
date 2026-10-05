@@ -2,6 +2,11 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { PDFDocument } from 'pdf-lib';
 import * as pdfjsLib from 'pdfjs-dist';
 import { disableAnalytics, enableAnalytics } from './analytics';
+import {
+  appendHistory,
+  createHistoryState,
+  moveHistory,
+} from './history';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
   'pdfjs-dist/build/pdf.worker.min.mjs',
@@ -37,12 +42,6 @@ const createFlattenedPageImage = async (pageData, pdfPage) => {
     canvas.height = 0;
   }
 };
-
-const createHistorySnapshot = (pages) => pages.map(({ id, pageNumber, redactions }) => ({
-  id,
-  pageNumber,
-  redactions: redactions.map((redaction) => ({ ...redaction })),
-}));
 
 function AnalyticsConsentBanner({ onAccept, onDecline }) {
   return (
@@ -108,16 +107,11 @@ function App() {
   };
 
   const addToHistory = useCallback((newPages) => {
-    const snapshot = createHistorySnapshot(newPages);
-    const { entries, index } = historyRef.current;
-    const newEntries = entries.slice(0, index + 1);
-    newEntries.push(snapshot);
-    const newIndex = newEntries.length - 1;
-
-    historyRef.current = { entries: newEntries, index: newIndex };
+    const nextHistory = appendHistory(historyRef.current, newPages);
+    historyRef.current = nextHistory;
     pagesRef.current = newPages;
-    setHistory(newEntries);
-    setHistoryIndex(newIndex);
+    setHistory(nextHistory.entries);
+    setHistoryIndex(nextHistory.index);
     setPages(newPages);
   }, []);
 
@@ -158,20 +152,20 @@ function App() {
         }),
       );
 
-      const initialSnapshot = createHistorySnapshot(loadedPages);
+      const initialHistory = createHistoryState(loadedPages);
       pageAssetsRef.current = new Map(loadedPages.map((page) => [page.id, {
         previewUrl: page.previewUrl,
         width: page.width,
         height: page.height,
       }]));
       pagesRef.current = loadedPages;
-      historyRef.current = { entries: [initialSnapshot], index: 0 };
+      historyRef.current = initialHistory;
       setPages(loadedPages);
       setPdfFile({ file, url: URL.createObjectURL(file) });
       setPdfName(file.name);
       setCurrentPageIndex(0);
-      setHistory([initialSnapshot]);
-      setHistoryIndex(0);
+      setHistory(initialHistory.entries);
+      setHistoryIndex(initialHistory.index);
     } catch (loadError) {
       console.error(loadError);
       setError('Could not load this PDF. Please try another file.');
@@ -311,35 +305,23 @@ function App() {
   };
 
   const undo = useCallback(() => {
-    const { entries, index } = historyRef.current;
-    const newIndex = Math.max(0, index - 1);
-    if (newIndex === index) return;
+    const result = moveHistory(historyRef.current, -1, pageAssetsRef.current);
+    if (!result) return;
 
-    const snapshot = entries[newIndex].map((page) => ({
-      ...page,
-      ...pageAssetsRef.current.get(page.id),
-      redactions: page.redactions.map((redaction) => ({ ...redaction })),
-    }));
-    historyRef.current = { entries, index: newIndex };
-    pagesRef.current = snapshot;
-    setHistoryIndex(newIndex);
-    setPages(snapshot);
+    historyRef.current = result.history;
+    pagesRef.current = result.pages;
+    setHistoryIndex(result.history.index);
+    setPages(result.pages);
   }, []);
 
   const redo = useCallback(() => {
-    const { entries, index } = historyRef.current;
-    const newIndex = Math.min(entries.length - 1, index + 1);
-    if (newIndex === index) return;
+    const result = moveHistory(historyRef.current, 1, pageAssetsRef.current);
+    if (!result) return;
 
-    const snapshot = entries[newIndex].map((page) => ({
-      ...page,
-      ...pageAssetsRef.current.get(page.id),
-      redactions: page.redactions.map((redaction) => ({ ...redaction })),
-    }));
-    historyRef.current = { entries, index: newIndex };
-    pagesRef.current = snapshot;
-    setHistoryIndex(newIndex);
-    setPages(snapshot);
+    historyRef.current = result.history;
+    pagesRef.current = result.pages;
+    setHistoryIndex(result.history.index);
+    setPages(result.pages);
   }, []);
 
   const saveCleanPdf = async () => {
