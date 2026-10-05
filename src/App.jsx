@@ -8,17 +8,16 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
   import.meta.url,
 ).toString();
 
-const createFlattenedPageImage = (pageData) => new Promise((resolve, reject) => {
-  const image = new Image();
-  image.onload = () => {
-    const canvas = document.createElement('canvas');
-    canvas.width = image.naturalWidth;
-    canvas.height = image.naturalHeight;
+const createFlattenedPageImage = async (pageData, pdfPage) => {
+  const viewport = pdfPage.getViewport({ scale: 3 });
+  const canvas = document.createElement('canvas');
+  const context = canvas.getContext('2d');
+  canvas.width = Math.ceil(viewport.width);
+  canvas.height = Math.ceil(viewport.height);
 
-    const context = canvas.getContext('2d');
-    context.drawImage(image, 0, 0);
+  try {
+    await pdfPage.render({ canvasContext: context, viewport }).promise;
     context.fillStyle = '#000000';
-
     pageData.redactions
       .filter((redaction) => !redaction.isPreview)
       .forEach((redaction) => {
@@ -30,11 +29,14 @@ const createFlattenedPageImage = (pageData) => new Promise((resolve, reject) => 
         );
       });
 
-    resolve(canvas.toDataURL('image/png'));
-  };
-  image.onerror = () => reject(new Error('Could not rasterize a PDF page.'));
-  image.src = pageData.previewUrl;
-});
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+    if (!blob) throw new Error('Could not encode the exported PDF page.');
+    return new Uint8Array(await blob.arrayBuffer());
+  } finally {
+    canvas.width = 0;
+    canvas.height = 0;
+  }
+};
 
 const createHistorySnapshot = (pages) => pages.map(({ id, pageNumber, redactions }) => ({
   id,
@@ -348,21 +350,18 @@ function App() {
 
     setProcessing(true);
     setError('');
+    let renderPdfDocument;
 
     try {
       const inputBytes = await pdfFile.file.arrayBuffer();
-      const sourcePdf = await PDFDocument.load(inputBytes);
+      renderPdfDocument = await pdfjsLib.getDocument({ data: inputBytes.slice(0) }).promise;
       const flattenedPdf = await PDFDocument.create();
 
       for (let index = 0; index < pages.length; index += 1) {
         const pageData = pages[index];
-        const sourcePageIndex = Math.min(
-          Math.max(0, pageData.pageNumber - 1),
-          sourcePdf.getPageCount() - 1,
-        );
-        const sourcePage = sourcePdf.getPage(sourcePageIndex);
-        const { width, height } = sourcePage.getSize();
-        const flattenedImage = await createFlattenedPageImage(pageData);
+        const renderPage = await renderPdfDocument.getPage(pageData.pageNumber);
+        const { width, height } = renderPage.getViewport({ scale: 1 });
+        const flattenedImage = await createFlattenedPageImage(pageData, renderPage);
         const image = await flattenedPdf.embedPng(flattenedImage);
         const page = flattenedPdf.addPage([width, height]);
 
@@ -393,6 +392,7 @@ function App() {
       console.error(saveError);
       setError('The export failed. Please try again with a different PDF.');
     } finally {
+      renderPdfDocument?.destroy();
       setProcessing(false);
     }
   };
