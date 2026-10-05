@@ -197,6 +197,41 @@ html, body {
   font-size: 13px;
 }
 
+.analytics-consent {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  max-width: 560px;
+  padding: 16px 18px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+}
+
+.analytics-consent strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 14px;
+}
+
+.analytics-consent p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.analytics-consent-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 8px;
+}
+
 /* Main App Wrapper */
 .app-wrapper {
   display: flex;
@@ -714,5 +749,18 @@ button:disabled {
   .footer-right {
     width: 100%;
     justify-content: center;
+  }
+
+  .analytics-consent {
+    right: 12px;
+    bottom: 12px;
+    left: 12px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  .analytics-consent-actions {
+    justify-content: flex-end;
   }
 }

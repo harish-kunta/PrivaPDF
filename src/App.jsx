@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { PDFDocument } from 'pdf-lib';
 import * as pdfjsLib from 'pdfjs-dist';
+import { disableAnalytics, enableAnalytics, trackEvent } from './analytics';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
   'pdfjs-dist/build/pdf.worker.min.mjs',
@@ -35,6 +36,24 @@ const createFlattenedPageImage = (pageData) => new Promise((resolve, reject) => 
   image.src = pageData.previewUrl;
 });
 
+function AnalyticsConsentBanner({ onAccept, onDecline }) {
+  return (
+    <aside className="analytics-consent" aria-label="Analytics consent">
+      <div>
+        <strong>Help improve PrivaPDF?</strong>
+        <p>
+          Optional anonymous usage analytics help us understand visits and feature usage.
+          PDF files, filenames, and document contents are never sent.
+        </p>
+      </div>
+      <div className="analytics-consent-actions">
+        <button type="button" className="toolbar-btn" onClick={onDecline}>No thanks</button>
+        <button type="button" className="toolbar-btn primary" onClick={onAccept}>Allow analytics</button>
+      </div>
+    </aside>
+  );
+}
+
 function App() {
   const fileInputRef = useRef(null);
   const pagesRef = useRef([]);
@@ -46,6 +65,9 @@ function App() {
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState('');
+  const [analyticsConsent, setAnalyticsConsent] = useState(() => (
+    window.localStorage.getItem('privapdf-analytics-consent')
+  ));
   const [history, setHistory] = useState([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
 
@@ -56,6 +78,21 @@ function App() {
       }
     };
   }, [pdfFile]);
+
+  useEffect(() => {
+    if (analyticsConsent === 'accepted') {
+      enableAnalytics().then((analytics) => {
+        if (analytics) trackEvent('page_view');
+      });
+    } else if (analyticsConsent === 'declined') {
+      disableAnalytics();
+    }
+  }, [analyticsConsent]);
+
+  const updateAnalyticsConsent = (consent) => {
+    window.localStorage.setItem('privapdf-analytics-consent', consent);
+    setAnalyticsConsent(consent);
+  };
 
   const addToHistory = useCallback((newPages) => {
     const snapshot = JSON.parse(JSON.stringify(newPages));
@@ -117,6 +154,7 @@ function App() {
       setCurrentPageIndex(0);
       setHistory([initialSnapshot]);
       setHistoryIndex(0);
+      trackEvent('pdf_imported');
     } catch (loadError) {
       console.error(loadError);
       setError('Could not load this PDF. Please try another file.');
@@ -311,6 +349,7 @@ function App() {
       anchor.download = pdfName ? `${pdfName.replace(/\.pdf$/i, '')}-redacted.pdf` : 'redacted.pdf';
       anchor.click();
       URL.revokeObjectURL(url);
+      trackEvent('redacted_pdf_exported');
     } catch (saveError) {
       console.error(saveError);
       setError('The export failed. Please try again with a different PDF.');
@@ -382,7 +421,7 @@ function App() {
               </div>
               <div className="info-item">
                 <span className="check">✓</span>
-                <span>No data collection</span>
+                <span>No PDF data collection</span>
               </div>
               <div className="info-item">
                 <span className="check">✓</span>
@@ -398,6 +437,12 @@ function App() {
             accept="application/pdf"
             onChange={handleFileInput}
           />
+          {!analyticsConsent && (
+            <AnalyticsConsentBanner
+              onAccept={() => updateAnalyticsConsent('accepted')}
+              onDecline={() => updateAnalyticsConsent('declined')}
+            />
+          )}
         </div>
       </div>
     );
@@ -546,6 +591,12 @@ function App() {
         accept="application/pdf"
         onChange={handleFileInput}
       />
+      {!analyticsConsent && (
+        <AnalyticsConsentBanner
+          onAccept={() => updateAnalyticsConsent('accepted')}
+          onDecline={() => updateAnalyticsConsent('declined')}
+        />
+      )}
     </div>
   );
 }
