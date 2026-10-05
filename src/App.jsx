@@ -427,6 +427,10 @@ function App() {
                 <span className="check">✓</span>
                 <span>Open source</span>
               </div>
+              <div className="info-item">
+                <span className="check">✓</span>
+                <a className="info-link" href={`${import.meta.env.BASE_URL}privacy.html`}>Privacy policy</a>
+              </div>
             </div>
             {error && <div className="error-message">{error}</div>}
           </div>
@@ -464,6 +468,20 @@ function App() {
           <button onClick={redo} disabled={!canRedo} className="toolbar-btn" title="Redo">↷</button>
         </div>
         <div className="header-right">
+          <a
+            href="https://github.com/harish-kunta/PrivaPDF"
+            target="_blank"
+            rel="noreferrer"
+            className="toolbar-btn github-link"
+          >
+            Open source
+          </a>
+          <a
+            href={`${import.meta.env.BASE_URL}privacy.html`}
+            className="toolbar-btn github-link"
+          >
+            Privacy
+          </a>
           <button onClick={resetWorkspace} className="toolbar-btn secondary">New</button>
           <button
             onClick={saveCleanPdf}

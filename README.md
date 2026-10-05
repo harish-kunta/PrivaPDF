@@ -4,13 +4,13 @@ A private, client-side PDF redaction tool that works entirely in your browser. Y
 
 ## Features
 
-- 🔒 **Private & Secure** - All processing happens in your browser. No data is sent to any server.
+- 🔒 **Private & Secure** - PDF processing happens in your browser. PDF data is not sent to any server.
 - ⚡ **Fast** - Instant redaction without server uploads or downloads.
 - 🎨 **Easy to Use** - Intuitive interface for redacting sensitive information.
 - 🖱️ **Drag & Drop** - Simply drag and drop your PDF files to get started.
 - 📄 **Multi-page Support** - Handle PDFs with any number of pages.
 - 🗑️ **Page Management** - Remove unwanted pages before downloading.
-- 💾 **Download** - Export your redacted PDFs with a single click.
+- 💾 **Flattened Export** - Export PDFs with redactions baked into page images.
 
 ## Getting Started
 
@@ -84,11 +84,16 @@ PrivaPDF/
 ## Privacy
 
 PrivaPDF respects your privacy:
-- No analytics or tracking
-- No server-side processing
-- No data collection
-- All processing is done locally in your browser
-- Your PDFs never leave your device
+- No PDF uploads or server-side document processing
+- PDF contents, filenames, text, and redaction coordinates are not collected
+- Optional Firebase Analytics is disabled by default and requires consent
+- Analytics, when enabled, records only general usage events
+- All PDF processing is done locally in your browser
+- See the [Privacy Policy](public/privacy.html) for details
+
+## Security note
+
+The exported PDF is flattened into page images with redactions painted into the pixels. This removes selectable text from the export and is intended to prevent the original content from remaining underneath a redaction overlay. Always inspect an exported document before sharing it.
 
 ## License
 
