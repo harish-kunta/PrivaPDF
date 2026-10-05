@@ -2,39 +2,48 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { PDFDocument } from 'pdf-lib';
 import * as pdfjsLib from 'pdfjs-dist';
 import { disableAnalytics, enableAnalytics, trackEvent } from './analytics';
+import {
+  cloneSnapshot,
+  createHistory,
+  pushHistory,
+  redoHistory,
+  undoHistory,
+} from './history';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
   'pdfjs-dist/build/pdf.worker.min.mjs',
   import.meta.url,
 ).toString();
 
-const createFlattenedPageImage = (pageData) => new Promise((resolve, reject) => {
-  const image = new Image();
-  image.onload = () => {
-    const canvas = document.createElement('canvas');
-    canvas.width = image.naturalWidth;
-    canvas.height = image.naturalHeight;
+// Preview rendering is intentionally low-res for speed; export re-renders
+// from the original PDF at EXPORT_SCALE so output stays sharp (issue #4).
+const PREVIEW_SCALE = 1.5;
+const EXPORT_SCALE = 3;
 
-    const context = canvas.getContext('2d');
-    context.drawImage(image, 0, 0);
-    context.fillStyle = '#000000';
+const renderRedactedPageImage = async (pdfPage, redactions, scale) => {
+  const viewport = pdfPage.getViewport({ scale });
+  const canvas = document.createElement('canvas');
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  const context = canvas.getContext('2d');
+  await pdfPage.render({ canvasContext: context, viewport }).promise;
 
-    pageData.redactions
-      .filter((redaction) => !redaction.isPreview)
-      .forEach((redaction) => {
-        context.fillRect(
-          (redaction.x / 100) * canvas.width,
-          (redaction.y / 100) * canvas.height,
-          (redaction.width / 100) * canvas.width,
-          (redaction.height / 100) * canvas.height,
-        );
-      });
+  // Bake redactions into pixels. The exported PDF contains no text layer,
+  // so redacted content is destroyed — not merely covered up.
+  context.fillStyle = '#000000';
+  redactions
+    .filter((redaction) => !redaction.isPreview)
+    .forEach((redaction) => {
+      context.fillRect(
+        (redaction.x / 100) * canvas.width,
+        (redaction.y / 100) * canvas.height,
+        (redaction.width / 100) * canvas.width,
+        (redaction.height / 100) * canvas.height,
+      );
+    });
 
-    resolve(canvas.toDataURL('image/png'));
-  };
-  image.onerror = () => reject(new Error('Could not rasterize a PDF page.'));
-  image.src = pageData.previewUrl;
-});
+  return canvas.toDataURL('image/png');
+};
 
 function AnalyticsConsentBanner({ onAccept, onDecline }) {
   return (
@@ -58,7 +67,14 @@ function AnalyticsConsentBanner({ onAccept, onDecline }) {
 function App() {
   const fileInputRef = useRef(null);
   const pagesRef = useRef([]);
-  const historyRef = useRef({ entries: [], index: -1 });
+  const historyRef = useRef(createHistory());
+  // Page preview images (data URLs) live here, keyed by page id. They are
+  // deliberately kept out of React state and history snapshots, which must
+  // stay lightweight (issue #3).
+  const pageImagesRef = useRef({});
+  // pdf.js document proxy, kept so export can re-render pages at full
+  // resolution instead of reusing the low-res preview (issue #4).
+  const pdfDocRef = useRef(null);
   const [pdfFile, setPdfFile] = useState(null);
   const [pdfName, setPdfName] = useState('');
   const [pages, setPages] = useState([]);
@@ -96,16 +112,13 @@ function App() {
   };
 
   const addToHistory = useCallback((newPages) => {
-    const snapshot = JSON.parse(JSON.stringify(newPages));
-    const { entries, index } = historyRef.current;
-    const newEntries = entries.slice(0, index + 1);
-    newEntries.push(snapshot);
-    const newIndex = newEntries.length - 1;
+    const snapshot = cloneSnapshot(newPages);
+    const next = pushHistory(historyRef.current, snapshot);
 
-    historyRef.current = { entries: newEntries, index: newIndex };
+    historyRef.current = next;
     pagesRef.current = snapshot;
-    setHistory(newEntries);
-    setHistoryIndex(newIndex);
+    setHistory(next.entries);
+    setHistoryIndex(next.index);
     setPages(snapshot);
   }, []);
 
@@ -116,44 +129,35 @@ function App() {
     try {
       const arrayBuffer = await file.arrayBuffer();
       const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-      const pageData = [];
+      pdfDocRef.current = pdf;
 
-      for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
-        pageData.push({
-          id: `${pageNumber}-${Date.now()}`,
-          pageNumber,
-          redactions: [],
-        });
-      }
-
-      const loadedPages = await Promise.all(
-        pageData.map(async (pageMeta) => {
-          const page = await pdf.getPage(pageMeta.pageNumber);
-          const viewport = page.getViewport({ scale: 1.5 });
+      const rendered = await Promise.all(
+        Array.from({ length: pdf.numPages }, async (_, i) => {
+          const pageNumber = i + 1;
+          const id = `${pageNumber}-${Date.now()}`;
+          const pdfPage = await pdf.getPage(pageNumber);
+          const viewport = pdfPage.getViewport({ scale: PREVIEW_SCALE });
           const canvas = document.createElement('canvas');
-          const context = canvas.getContext('2d');
           canvas.width = viewport.width;
           canvas.height = viewport.height;
-          await page.render({ canvasContext: context, viewport }).promise;
-          const previewUrl = canvas.toDataURL('image/png');
-
-          return {
-            ...pageMeta,
-            previewUrl,
-            width: viewport.width,
-            height: viewport.height,
-          };
+          await pdfPage.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+          return { meta: { id, pageNumber, redactions: [] }, image: canvas.toDataURL('image/png') };
         }),
       );
 
-      const initialSnapshot = JSON.parse(JSON.stringify(loadedPages));
-      pagesRef.current = loadedPages;
-      historyRef.current = { entries: [initialSnapshot], index: 0 };
-      setPages(loadedPages);
+      const pageMetas = rendered.map((r) => r.meta);
+      const images = {};
+      rendered.forEach((r) => { images[r.meta.id] = r.image; });
+      pageImagesRef.current = images;
+
+      const snapshot = cloneSnapshot(pageMetas);
+      pagesRef.current = snapshot;
+      historyRef.current = { entries: [snapshot], index: 0 };
+      setPages(pageMetas);
       setPdfFile({ file, url: URL.createObjectURL(file) });
       setPdfName(file.name);
       setCurrentPageIndex(0);
-      setHistory([initialSnapshot]);
+      setHistory([snapshot]);
       setHistoryIndex(0);
       trackEvent('pdf_imported');
     } catch (loadError) {
@@ -187,14 +191,14 @@ function App() {
     await renderPdf(file);
   };
 
-  const handleCanvasMouseDown = (event) => {
+  const handlePointerDown = (event) => {
     if (!pages.length) return;
     const img = event.currentTarget;
     const rect = img.getBoundingClientRect();
     const startX = (event.clientX - rect.left) / (rect.width / 100);
     const startY = (event.clientY - rect.top) / (rect.height / 100);
 
-    const onMouseMove = (moveEvent) => {
+    const onPointerMove = (moveEvent) => {
       const currentX = (moveEvent.clientX - rect.left) / (rect.width / 100);
       const currentY = (moveEvent.clientY - rect.top) / (rect.height / 100);
 
@@ -205,7 +209,7 @@ function App() {
 
       if (width > 0.5 && height > 0.5) {
         setPages((prevPages) => {
-          const newPages = JSON.parse(JSON.stringify(prevPages));
+          const newPages = cloneSnapshot(prevPages);
           const currentPage = newPages[currentPageIndex];
           const redactionBox = {
             id: `temp-${Date.now()}`,
@@ -228,8 +232,8 @@ function App() {
       }
     };
 
-    const onMouseUp = () => {
-      const newPages = JSON.parse(JSON.stringify(pagesRef.current));
+    const onPointerUp = () => {
+      const newPages = cloneSnapshot(pagesRef.current);
       const currentPage = newPages[currentPageIndex];
       const previewIndex = currentPage.redactions.findIndex((r) => r.isPreview);
       let shouldAddToHistory = false;
@@ -252,16 +256,16 @@ function App() {
         setPages(newPages);
       }
 
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
     };
 
-    window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', onMouseUp);
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
   };
 
   const removeRedaction = (redactionId) => {
-    const newPages = JSON.parse(JSON.stringify(pagesRef.current));
+    const newPages = cloneSnapshot(pagesRef.current);
     newPages[currentPageIndex].redactions = newPages[currentPageIndex].redactions.filter(
       (r) => r.id !== redactionId,
     );
@@ -278,26 +282,24 @@ function App() {
   };
 
   const undo = useCallback(() => {
-    const { entries, index } = historyRef.current;
-    const newIndex = Math.max(0, index - 1);
-    if (newIndex === index) return;
+    const next = undoHistory(historyRef.current);
+    if (next.index === historyRef.current.index) return;
 
-    const snapshot = JSON.parse(JSON.stringify(entries[newIndex]));
-    historyRef.current = { entries, index: newIndex };
+    historyRef.current = next;
+    const snapshot = cloneSnapshot(next.entries[next.index]);
     pagesRef.current = snapshot;
-    setHistoryIndex(newIndex);
+    setHistoryIndex(next.index);
     setPages(snapshot);
   }, []);
 
   const redo = useCallback(() => {
-    const { entries, index } = historyRef.current;
-    const newIndex = Math.min(entries.length - 1, index + 1);
-    if (newIndex === index) return;
+    const next = redoHistory(historyRef.current);
+    if (next.index === historyRef.current.index) return;
 
-    const snapshot = JSON.parse(JSON.stringify(entries[newIndex]));
-    historyRef.current = { entries, index: newIndex };
+    historyRef.current = next;
+    const snapshot = cloneSnapshot(next.entries[next.index]);
     pagesRef.current = snapshot;
-    setHistoryIndex(newIndex);
+    setHistoryIndex(next.index);
     setPages(snapshot);
   }, []);
 
@@ -315,6 +317,11 @@ function App() {
       const sourcePdf = await PDFDocument.load(inputBytes);
       const flattenedPdf = await PDFDocument.create();
 
+      const pdfDoc = pdfDocRef.current;
+      if (!pdfDoc) {
+        throw new Error('PDF document is no longer available. Please re-upload the file.');
+      }
+
       for (let index = 0; index < pages.length; index += 1) {
         const pageData = pages[index];
         const sourcePageIndex = Math.min(
@@ -323,7 +330,16 @@ function App() {
         );
         const sourcePage = sourcePdf.getPage(sourcePageIndex);
         const { width, height } = sourcePage.getSize();
-        const flattenedImage = await createFlattenedPageImage(pageData);
+        // Re-render from the original PDF at export resolution — the
+        // on-screen preview is low-res and must not cap output quality.
+        const pdfPage = await pdfDoc.getPage(
+          Math.min(Math.max(1, pageData.pageNumber), pdfDoc.numPages),
+        );
+        const flattenedImage = await renderRedactedPageImage(
+          pdfPage,
+          pageData.redactions,
+          EXPORT_SCALE,
+        );
         const image = await flattenedPdf.embedPng(flattenedImage);
         const page = flattenedPdf.addPage([width, height]);
 
@@ -361,7 +377,9 @@ function App() {
 
   const resetWorkspace = () => {
     pagesRef.current = [];
-    historyRef.current = { entries: [], index: -1 };
+    historyRef.current = createHistory();
+    pageImagesRef.current = {};
+    pdfDocRef.current = null;
     setPdfFile(null);
     setPdfName('');
     setPages([]);
@@ -393,18 +411,18 @@ function App() {
         <div className={`upload-zone ${isDraggingOver ? 'active' : ''}`}>
           <div className="upload-content">
             <div className="brand-header">
-              <div className="brand-icon">ð</div>
+              <div className="brand-icon">🔒</div>
               <div>
                 <h1>PrivaPDF</h1>
                 <p className="tagline">Redact Privately</p>
               </div>
             </div>
             <div className="trust-badges">
-              <span className="badge secure">ð 100% Private</span>
-              <span className="badge local">â¡ Client-Side Only</span>
+              <span className="badge secure">🔐 100% Private</span>
+              <span className="badge local">⚡ Client-Side Only</span>
             </div>
             <div className="upload-main">
-              <div className="upload-icon">ð</div>
+              <div className="upload-icon">📄</div>
               <h2>Drop your PDF here</h2>
               <p className="description">Redact sensitive information without uploading anywhere. Your data stays on your device.</p>
               <button
@@ -417,15 +435,15 @@ function App() {
             </div>
             <div className="trust-info">
               <div className="info-item">
-                <span className="check">â</span>
+                <span className="check">✓</span>
                 <span>No server uploads</span>
               </div>
               <div className="info-item">
-                <span className="check">â</span>
+                <span className="check">✓</span>
                 <span>No PDF data collection</span>
               </div>
               <div className="info-item">
-                <span className="check">â</span>
+                <span className="check">✓</span>
                 <span>Open source</span>
               </div>
             </div>
@@ -453,16 +471,16 @@ function App() {
     <div className="app-wrapper">
       <div className="header">
         <div className="header-left">
-          <div className="header-logo">ð</div>
+          <div className="header-logo">🔒</div>
           <div className="header-brand">
             <h1>PrivaPDF</h1>
-            <span className="header-badge">secure â¢ private</span>
+            <span className="header-badge">secure • private</span>
           </div>
           <span className="file-name">{pdfName}</span>
         </div>
         <div className="header-center">
-          <button onClick={undo} disabled={!canUndo} className="toolbar-btn" title="Undo">â¶</button>
-          <button onClick={redo} disabled={!canRedo} className="toolbar-btn" title="Redo">â·</button>
+          <button onClick={undo} disabled={!canUndo} className="toolbar-btn" title="Undo">↶</button>
+          <button onClick={redo} disabled={!canRedo} className="toolbar-btn" title="Redo">↷</button>
         </div>
         <div className="header-right">
           <button onClick={resetWorkspace} className="toolbar-btn secondary">New</button>
@@ -487,7 +505,7 @@ function App() {
                 className={`thumbnail ${idx === currentPageIndex ? 'active' : ''}`}
                 onClick={() => setCurrentPageIndex(idx)}
               >
-                <img src={page.previewUrl} alt={`Page ${idx + 1}`} />
+                <img src={pageImagesRef.current[page.id]} alt={`Page ${idx + 1}`} />
                 <div className="page-number">{idx + 1}</div>
                 {page.redactions.some((r) => !r.isPreview) && (
                   <div className="redaction-badge">{page.redactions.filter((r) => !r.isPreview).length}</div>
@@ -508,11 +526,12 @@ function App() {
             {currentPage && (
               <div className="pdf-page-container">
                 <img
-                  src={currentPage.previewUrl}
+                  src={pageImagesRef.current[currentPage.id]}
                   alt={`Page ${currentPageIndex + 1}`}
                   className="pdf-image"
-                  onMouseDown={handleCanvasMouseDown}
+                  onPointerDown={handlePointerDown}
                   draggable={false}
+                  style={{ touchAction: 'none' }}
                 />
                 <div className="redactions-canvas">
                   {currentPage.redactions.map((box) => (
@@ -538,7 +557,7 @@ function App() {
             <div className="footer-left">
               <span>Page {currentPageIndex + 1} of {pages.length}</span>
               {currentPage?.redactions.some((r) => !r.isPreview) && (
-                <span className="redaction-count">â¢ {currentPage.redactions.filter((r) => !r.isPreview).length} redactions</span>
+                <span className="redaction-count">• {currentPage.redactions.filter((r) => !r.isPreview).length} redactions</span>
               )}
             </div>
             <div className="footer-center">
@@ -547,7 +566,7 @@ function App() {
                 disabled={currentPageIndex === 0}
                 className="nav-btn"
               >
-                â
+                ←
               </button>
               <input
                 type="number"
@@ -567,7 +586,7 @@ function App() {
                 disabled={currentPageIndex === pages.length - 1}
                 className="nav-btn"
               >
-                â
+                →
               </button>
             </div>
             <div className="footer-right">
@@ -576,7 +595,7 @@ function App() {
                 className="nav-btn delete"
                 title="Remove this page"
               >
-                ð
+                🗑
               </button>
             </div>
           </div>
