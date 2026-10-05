@@ -9,6 +9,8 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
 
 function App() {
   const fileInputRef = useRef(null);
+  const pagesRef = useRef([]);
+  const historyRef = useRef({ entries: [], index: -1 });
   const [pdfFile, setPdfFile] = useState(null);
   const [pdfName, setPdfName] = useState('');
   const [pages, setPages] = useState([]);
@@ -28,13 +30,18 @@ function App() {
   }, [pdfFile]);
 
   const addToHistory = useCallback((newPages) => {
-    setHistory((prev) => {
-      const updatedHistory = prev.slice(0, historyIndex + 1);
-      updatedHistory.push(JSON.parse(JSON.stringify(newPages)));
-      return updatedHistory;
-    });
-    setHistoryIndex((prev) => prev + 1);
-  }, [historyIndex]);
+    const snapshot = JSON.parse(JSON.stringify(newPages));
+    const { entries, index } = historyRef.current;
+    const newEntries = entries.slice(0, index + 1);
+    newEntries.push(snapshot);
+    const newIndex = newEntries.length - 1;
+
+    historyRef.current = { entries: newEntries, index: newIndex };
+    pagesRef.current = snapshot;
+    setHistory(newEntries);
+    setHistoryIndex(newIndex);
+    setPages(snapshot);
+  }, []);
 
   const renderPdf = async (file) => {
     setError('');
@@ -73,11 +80,14 @@ function App() {
         }),
       );
 
+      const initialSnapshot = JSON.parse(JSON.stringify(loadedPages));
+      pagesRef.current = loadedPages;
+      historyRef.current = { entries: [initialSnapshot], index: 0 };
       setPages(loadedPages);
       setPdfFile({ file, url: URL.createObjectURL(file) });
       setPdfName(file.name);
       setCurrentPageIndex(0);
-      setHistory([JSON.parse(JSON.stringify(loadedPages))]);
+      setHistory([initialSnapshot]);
       setHistoryIndex(0);
     } catch (loadError) {
       console.error(loadError);
@@ -128,7 +138,7 @@ function App() {
 
       if (width > 0.5 && height > 0.5) {
         setPages((prevPages) => {
-          const newPages = [...prevPages];
+          const newPages = JSON.parse(JSON.stringify(prevPages));
           const currentPage = newPages[currentPageIndex];
           const redactionBox = {
             id: `temp-${Date.now()}`,
@@ -145,29 +155,35 @@ function App() {
           } else {
             newPages[currentPageIndex].redactions.push(redactionBox);
           }
+          pagesRef.current = newPages;
           return newPages;
         });
       }
     };
 
     const onMouseUp = () => {
-      setPages((prevPages) => {
-        const newPages = JSON.parse(JSON.stringify(prevPages));
-        const currentPage = newPages[currentPageIndex];
-        const previewIndex = currentPage.redactions.findIndex((r) => r.isPreview);
+      const newPages = JSON.parse(JSON.stringify(pagesRef.current));
+      const currentPage = newPages[currentPageIndex];
+      const previewIndex = currentPage.redactions.findIndex((r) => r.isPreview);
+      let shouldAddToHistory = false;
 
-        if (previewIndex >= 0) {
-          const previewBox = currentPage.redactions[previewIndex];
-          if (previewBox.width > 0.5 && previewBox.height > 0.5) {
-            delete previewBox.isPreview;
-            previewBox.id = `redaction-${Date.now()}`;
-            addToHistory(newPages);
-          } else {
-            currentPage.redactions.splice(previewIndex, 1);
-          }
+      if (previewIndex >= 0) {
+        const previewBox = currentPage.redactions[previewIndex];
+        if (previewBox.width > 0.5 && previewBox.height > 0.5) {
+          delete previewBox.isPreview;
+          previewBox.id = `redaction-${Date.now()}`;
+          shouldAddToHistory = true;
+        } else {
+          currentPage.redactions.splice(previewIndex, 1);
         }
-        return newPages;
-      });
+      }
+
+      if (shouldAddToHistory) {
+        addToHistory(newPages);
+      } else {
+        pagesRef.current = newPages;
+        setPages(newPages);
+      }
 
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('mouseup', onMouseUp);
@@ -178,42 +194,45 @@ function App() {
   };
 
   const removeRedaction = (redactionId) => {
-    setPages((prevPages) => {
-      const newPages = JSON.parse(JSON.stringify(prevPages));
-      newPages[currentPageIndex].redactions = newPages[currentPageIndex].redactions.filter(
-        (r) => r.id !== redactionId,
-      );
-      addToHistory(newPages);
-      return newPages;
-    });
+    const newPages = JSON.parse(JSON.stringify(pagesRef.current));
+    newPages[currentPageIndex].redactions = newPages[currentPageIndex].redactions.filter(
+      (r) => r.id !== redactionId,
+    );
+    setPages(newPages);
+    addToHistory(newPages);
   };
 
   const removePage = (pageIndex) => {
-    setPages((prevPages) => {
-      const newPages = prevPages.filter((_, idx) => idx !== pageIndex);
-      addToHistory(newPages);
-      if (currentPageIndex >= newPages.length) {
-        setCurrentPageIndex(Math.max(0, newPages.length - 1));
-      }
-      return newPages;
-    });
-  };
-
-  const undo = () => {
-    if (historyIndex > 0) {
-      const newIndex = historyIndex - 1;
-      setHistoryIndex(newIndex);
-      setPages(JSON.parse(JSON.stringify(history[newIndex])));
+    const newPages = pagesRef.current.filter((_, idx) => idx !== pageIndex);
+    addToHistory(newPages);
+    if (currentPageIndex >= newPages.length) {
+      setCurrentPageIndex(Math.max(0, newPages.length - 1));
     }
   };
 
-  const redo = () => {
-    if (historyIndex < history.length - 1) {
-      const newIndex = historyIndex + 1;
-      setHistoryIndex(newIndex);
-      setPages(JSON.parse(JSON.stringify(history[newIndex])));
-    }
-  };
+  const undo = useCallback(() => {
+    const { entries, index } = historyRef.current;
+    const newIndex = Math.max(0, index - 1);
+    if (newIndex === index) return;
+
+    const snapshot = JSON.parse(JSON.stringify(entries[newIndex]));
+    historyRef.current = { entries, index: newIndex };
+    pagesRef.current = snapshot;
+    setHistoryIndex(newIndex);
+    setPages(snapshot);
+  }, []);
+
+  const redo = useCallback(() => {
+    const { entries, index } = historyRef.current;
+    const newIndex = Math.min(entries.length - 1, index + 1);
+    if (newIndex === index) return;
+
+    const snapshot = JSON.parse(JSON.stringify(entries[newIndex]));
+    historyRef.current = { entries, index: newIndex };
+    pagesRef.current = snapshot;
+    setHistoryIndex(newIndex);
+    setPages(snapshot);
+  }, []);
 
   const saveCleanPdf = async () => {
     if (!pdfFile?.file || pages.length === 0) {
@@ -275,6 +294,8 @@ function App() {
   };
 
   const resetWorkspace = () => {
+    pagesRef.current = [];
+    historyRef.current = { entries: [], index: -1 };
     setPdfFile(null);
     setPdfName('');
     setPages([]);
@@ -305,16 +326,43 @@ function App() {
       >
         <div className={`upload-zone ${isDraggingOver ? 'active' : ''}`}>
           <div className="upload-content">
-            <div className="upload-icon">📄</div>
-            <h1>Drop your PDF here</h1>
-            <p>Redact sensitive information. No uploads, no servers, no tracking.</p>
-            <button
-              type="button"
-              className="primary-button"
-              onClick={() => fileInputRef.current?.click()}
-            >
-              Select a PDF
-            </button>
+            <div className="brand-header">
+              <div className="brand-icon">🔒</div>
+              <div>
+                <h1>PrivaPDF</h1>
+                <p className="tagline">Redact Privately</p>
+              </div>
+            </div>
+            <div className="trust-badges">
+              <span className="badge secure">🔐 100% Private</span>
+              <span className="badge local">⚡ Client-Side Only</span>
+            </div>
+            <div className="upload-main">
+              <div className="upload-icon">📄</div>
+              <h2>Drop your PDF here</h2>
+              <p className="description">Redact sensitive information without uploading anywhere. Your data stays on your device.</p>
+              <button
+                type="button"
+                className="primary-button"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                Select a PDF
+              </button>
+            </div>
+            <div className="trust-info">
+              <div className="info-item">
+                <span className="check">✓</span>
+                <span>No server uploads</span>
+              </div>
+              <div className="info-item">
+                <span className="check">✓</span>
+                <span>No data collection</span>
+              </div>
+              <div className="info-item">
+                <span className="check">✓</span>
+                <span>Open source</span>
+              </div>
+            </div>
             {error && <div className="error-message">{error}</div>}
           </div>
           <input
@@ -333,7 +381,11 @@ function App() {
     <div className="app-wrapper">
       <div className="header">
         <div className="header-left">
-          <h1>PrivaPDF</h1>
+          <div className="header-logo">🔒</div>
+          <div className="header-brand">
+            <h1>PrivaPDF</h1>
+            <span className="header-badge">secure • private</span>
+          </div>
           <span className="file-name">{pdfName}</span>
         </div>
         <div className="header-center">

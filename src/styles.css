@@ -71,27 +71,120 @@ html, body {
 
 .upload-content {
   text-align: center;
-  max-width: 540px;
+  max-width: 600px;
   padding: 40px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
 }
 
-.upload-icon {
-  font-size: 60px;
-  margin-bottom: 20px;
-}
-
-.upload-content h1 {
-  font-size: 32px;
-  font-weight: 600;
+.brand-header {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
   margin-bottom: 12px;
+}
+
+.brand-icon {
+  font-size: 32px;
+}
+
+.brand-header h1 {
+  font-size: 28px;
+  font-weight: 700;
+  margin: 0;
+  background: linear-gradient(135deg, #0071e3 0%, #0054b3 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
   letter-spacing: -0.5px;
 }
 
-.upload-content p {
+.tagline {
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin: 4px 0 0 0;
+}
+
+.trust-badges {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 16px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.badge.secure {
+  background: rgba(0, 113, 227, 0.1);
+  color: #0071e3;
+  border: 1px solid rgba(0, 113, 227, 0.2);
+}
+
+.badge.local {
+  background: rgba(52, 199, 89, 0.1);
+  color: #34c759;
+  border: 1px solid rgba(52, 199, 89, 0.2);
+}
+
+.upload-main {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.upload-icon {
+  font-size: 64px;
+}
+
+.upload-main h2 {
+  font-size: 32px;
+  font-weight: 600;
+  margin: 0;
+  letter-spacing: -0.5px;
+}
+
+.description {
   font-size: 15px;
   color: var(--text-secondary);
-  margin-bottom: 24px;
   line-height: 1.6;
+  margin: 0;
+  max-width: 480px;
+  margin: 0 auto;
+}
+
+.trust-info {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
+  background: var(--bg-secondary);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+
+.info-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.check {
+  color: #34c759;
+  font-weight: 600;
+  font-size: 14px;
 }
 
 .error-message {
@@ -134,10 +227,34 @@ html, body {
   flex: 0 1 auto;
 }
 
+.header-logo {
+  font-size: 24px;
+  flex-shrink: 0;
+}
+
+.header-brand {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
 .header-left h1 {
   font-size: 18px;
   font-weight: 600;
   margin: 0;
+  white-space: nowrap;
+  background: linear-gradient(135deg, #0071e3 0%, #0054b3 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.header-badge {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-weight: 500;
+  letter-spacing: 0.5px;
   white-space: nowrap;
 }
 
