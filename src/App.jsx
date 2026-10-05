@@ -36,6 +36,12 @@ const createFlattenedPageImage = (pageData) => new Promise((resolve, reject) => 
   image.src = pageData.previewUrl;
 });
 
+const createHistorySnapshot = (pages) => pages.map(({ id, pageNumber, redactions }) => ({
+  id,
+  pageNumber,
+  redactions: redactions.map((redaction) => ({ ...redaction })),
+}));
+
 function AnalyticsConsentBanner({ onAccept, onDecline }) {
   return (
     <aside className="analytics-consent" aria-label="Analytics consent">
@@ -58,6 +64,7 @@ function AnalyticsConsentBanner({ onAccept, onDecline }) {
 function App() {
   const fileInputRef = useRef(null);
   const pagesRef = useRef([]);
+  const pageAssetsRef = useRef(new Map());
   const historyRef = useRef({ entries: [], index: -1 });
   const [pdfFile, setPdfFile] = useState(null);
   const [pdfName, setPdfName] = useState('');
@@ -99,17 +106,17 @@ function App() {
   };
 
   const addToHistory = useCallback((newPages) => {
-    const snapshot = JSON.parse(JSON.stringify(newPages));
+    const snapshot = createHistorySnapshot(newPages);
     const { entries, index } = historyRef.current;
     const newEntries = entries.slice(0, index + 1);
     newEntries.push(snapshot);
     const newIndex = newEntries.length - 1;
 
     historyRef.current = { entries: newEntries, index: newIndex };
-    pagesRef.current = snapshot;
+    pagesRef.current = newPages;
     setHistory(newEntries);
     setHistoryIndex(newIndex);
-    setPages(snapshot);
+    setPages(newPages);
   }, []);
 
   const renderPdf = async (file) => {
@@ -149,7 +156,12 @@ function App() {
         }),
       );
 
-      const initialSnapshot = JSON.parse(JSON.stringify(loadedPages));
+      const initialSnapshot = createHistorySnapshot(loadedPages);
+      pageAssetsRef.current = new Map(loadedPages.map((page) => [page.id, {
+        previewUrl: page.previewUrl,
+        width: page.width,
+        height: page.height,
+      }]));
       pagesRef.current = loadedPages;
       historyRef.current = { entries: [initialSnapshot], index: 0 };
       setPages(loadedPages);
@@ -189,16 +201,23 @@ function App() {
     await renderPdf(file);
   };
 
-  const handleCanvasMouseDown = (event) => {
+  const handleCanvasPointerDown = (event) => {
     if (!pages.length) return;
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    event.preventDefault();
     const img = event.currentTarget;
     const rect = img.getBoundingClientRect();
-    const startX = (event.clientX - rect.left) / (rect.width / 100);
-    const startY = (event.clientY - rect.top) / (rect.height / 100);
+    const clamp = (value) => Math.min(100, Math.max(0, value));
+    const startX = clamp(((event.clientX - rect.left) / rect.width) * 100);
+    const startY = clamp(((event.clientY - rect.top) / rect.height) * 100);
+    const pointerId = event.pointerId;
+    const previewId = `temp-${Date.now()}`;
+    const drawPageIndex = currentPageIndex;
 
-    const onMouseMove = (moveEvent) => {
-      const currentX = (moveEvent.clientX - rect.left) / (rect.width / 100);
-      const currentY = (moveEvent.clientY - rect.top) / (rect.height / 100);
+    const onPointerMove = (moveEvent) => {
+      if (moveEvent.pointerId !== pointerId) return;
+      const currentX = clamp(((moveEvent.clientX - rect.left) / rect.width) * 100);
+      const currentY = clamp(((moveEvent.clientY - rect.top) / rect.height) * 100);
 
       const x = Math.min(startX, currentX);
       const y = Math.min(startY, currentY);
@@ -206,45 +225,50 @@ function App() {
       const height = Math.abs(currentY - startY);
 
       if (width > 0.5 && height > 0.5) {
-        setPages((prevPages) => {
-          const newPages = JSON.parse(JSON.stringify(prevPages));
-          const currentPage = newPages[currentPageIndex];
-          const redactionBox = {
-            id: `temp-${Date.now()}`,
-            x,
-            y,
-            width,
-            height,
-            isPreview: true,
-          };
-
-          const existingPreviewIndex = currentPage.redactions.findIndex((r) => r.isPreview);
-          if (existingPreviewIndex >= 0) {
-            newPages[currentPageIndex].redactions[existingPreviewIndex] = redactionBox;
-          } else {
-            newPages[currentPageIndex].redactions.push(redactionBox);
-          }
-          pagesRef.current = newPages;
-          return newPages;
-        });
+        const currentPages = pagesRef.current;
+        const newPages = [...currentPages];
+        const currentPage = newPages[drawPageIndex];
+        const redactionBox = {
+          id: previewId,
+          x,
+          y,
+          width,
+          height,
+          isPreview: true,
+        };
+        const redactions = [...currentPage.redactions];
+        const existingPreviewIndex = redactions.findIndex((r) => r.isPreview);
+        if (existingPreviewIndex >= 0) {
+          redactions[existingPreviewIndex] = redactionBox;
+        } else {
+          redactions.push(redactionBox);
+        }
+        newPages[drawPageIndex] = { ...currentPage, redactions };
+        pagesRef.current = newPages;
+        setPages(newPages);
       }
     };
 
-    const onMouseUp = () => {
-      const newPages = JSON.parse(JSON.stringify(pagesRef.current));
-      const currentPage = newPages[currentPageIndex];
-      const previewIndex = currentPage.redactions.findIndex((r) => r.isPreview);
+    const finishPointer = (finishEvent, commit) => {
+      if (finishEvent.pointerId !== pointerId) return;
+      const currentPages = pagesRef.current;
+      const currentPage = currentPages[drawPageIndex];
+      const previewIndex = currentPage?.redactions.findIndex((r) => r.id === previewId) ?? -1;
       let shouldAddToHistory = false;
+      let newPages = currentPages;
 
       if (previewIndex >= 0) {
-        const previewBox = currentPage.redactions[previewIndex];
-        if (previewBox.width > 0.5 && previewBox.height > 0.5) {
+        const redactions = currentPage.redactions.map((redaction) => ({ ...redaction }));
+        const previewBox = redactions[previewIndex];
+        if (commit && previewBox.width > 0.5 && previewBox.height > 0.5) {
           delete previewBox.isPreview;
           previewBox.id = `redaction-${Date.now()}`;
           shouldAddToHistory = true;
         } else {
-          currentPage.redactions.splice(previewIndex, 1);
+          redactions.splice(previewIndex, 1);
         }
+        newPages = [...currentPages];
+        newPages[drawPageIndex] = { ...currentPage, redactions };
       }
 
       if (shouldAddToHistory) {
@@ -254,20 +278,25 @@ function App() {
         setPages(newPages);
       }
 
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
+      window.removeEventListener('pointercancel', onPointerCancel);
     };
 
-    window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', onMouseUp);
+    const onPointerUp = (upEvent) => finishPointer(upEvent, true);
+    const onPointerCancel = (cancelEvent) => finishPointer(cancelEvent, false);
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+    window.addEventListener('pointercancel', onPointerCancel);
   };
 
   const removeRedaction = (redactionId) => {
-    const newPages = JSON.parse(JSON.stringify(pagesRef.current));
-    newPages[currentPageIndex].redactions = newPages[currentPageIndex].redactions.filter(
-      (r) => r.id !== redactionId,
-    );
-    setPages(newPages);
+    const currentPages = pagesRef.current;
+    const newPages = [...currentPages];
+    newPages[currentPageIndex] = {
+      ...currentPages[currentPageIndex],
+      redactions: currentPages[currentPageIndex].redactions.filter((r) => r.id !== redactionId),
+    };
     addToHistory(newPages);
   };
 
@@ -284,7 +313,11 @@ function App() {
     const newIndex = Math.max(0, index - 1);
     if (newIndex === index) return;
 
-    const snapshot = JSON.parse(JSON.stringify(entries[newIndex]));
+    const snapshot = entries[newIndex].map((page) => ({
+      ...page,
+      ...pageAssetsRef.current.get(page.id),
+      redactions: page.redactions.map((redaction) => ({ ...redaction })),
+    }));
     historyRef.current = { entries, index: newIndex };
     pagesRef.current = snapshot;
     setHistoryIndex(newIndex);
@@ -296,7 +329,11 @@ function App() {
     const newIndex = Math.min(entries.length - 1, index + 1);
     if (newIndex === index) return;
 
-    const snapshot = JSON.parse(JSON.stringify(entries[newIndex]));
+    const snapshot = entries[newIndex].map((page) => ({
+      ...page,
+      ...pageAssetsRef.current.get(page.id),
+      redactions: page.redactions.map((redaction) => ({ ...redaction })),
+    }));
     historyRef.current = { entries, index: newIndex };
     pagesRef.current = snapshot;
     setHistoryIndex(newIndex);
@@ -362,6 +399,7 @@ function App() {
 
   const resetWorkspace = () => {
     pagesRef.current = [];
+    pageAssetsRef.current.clear();
     historyRef.current = { entries: [], index: -1 };
     setPdfFile(null);
     setPdfName('');
@@ -541,7 +579,7 @@ function App() {
                   src={currentPage.previewUrl}
                   alt={`Page ${currentPageIndex + 1}`}
                   className="pdf-image"
-                  onMouseDown={handleCanvasMouseDown}
+                  onPointerDown={handleCanvasPointerDown}
                   draggable={false}
                 />
                 <div className="redactions-canvas">

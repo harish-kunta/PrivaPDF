@@ -462,6 +462,8 @@ html, body {
   display: block;
   cursor: crosshair;
   user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
   max-width: 800px;
 }
 
