@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { PDFDocument } from 'pdf-lib';
 import * as pdfjsLib from 'pdfjs-dist';
-import { disableAnalytics, enableAnalytics, trackEvent } from './analytics';
+import { disableAnalytics, enableAnalytics } from './analytics';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
   'pdfjs-dist/build/pdf.worker.min.mjs',
@@ -42,8 +42,9 @@ function AnalyticsConsentBanner({ onAccept, onDecline }) {
       <div>
         <strong>Help improve PrivaPDF?</strong>
         <p>
-          Optional anonymous usage analytics help us understand visits and feature usage.
-          PDF files, filenames, and document contents are never sent.
+          Optional Cloudflare analytics count page visits. If you allow it, your browser
+          contacts Cloudflare for basic traffic measurement. Your PDFs, filenames, and
+          document contents are never sent.
         </p>
       </div>
       <div className="analytics-consent-actions">
@@ -66,7 +67,7 @@ function App() {
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState('');
   const [analyticsConsent, setAnalyticsConsent] = useState(() => (
-    window.localStorage.getItem('privapdf-analytics-consent')
+    window.localStorage.getItem('privapdf-cloudflare-analytics-consent')
   ));
   const [history, setHistory] = useState([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
@@ -81,17 +82,20 @@ function App() {
 
   useEffect(() => {
     if (analyticsConsent === 'accepted') {
-      enableAnalytics().then((analytics) => {
-        if (analytics) trackEvent('page_view');
-      });
+      enableAnalytics();
     } else if (analyticsConsent === 'declined') {
       disableAnalytics();
     }
   }, [analyticsConsent]);
 
   const updateAnalyticsConsent = (consent) => {
-    window.localStorage.setItem('privapdf-analytics-consent', consent);
+    window.localStorage.setItem('privapdf-cloudflare-analytics-consent', consent);
     setAnalyticsConsent(consent);
+  };
+
+  const manageAnalyticsConsent = () => {
+    window.localStorage.removeItem('privapdf-cloudflare-analytics-consent');
+    window.location.reload();
   };
 
   const addToHistory = useCallback((newPages) => {
@@ -154,7 +158,6 @@ function App() {
       setCurrentPageIndex(0);
       setHistory([initialSnapshot]);
       setHistoryIndex(0);
-      trackEvent('pdf_imported');
     } catch (loadError) {
       console.error(loadError);
       setError('Could not load this PDF. Please try another file.');
@@ -349,7 +352,6 @@ function App() {
       anchor.download = pdfName ? `${pdfName.replace(/\.pdf$/i, '')}-redacted.pdf` : 'redacted.pdf';
       anchor.click();
       URL.revokeObjectURL(url);
-      trackEvent('redacted_pdf_exported');
     } catch (saveError) {
       console.error(saveError);
       setError('The export failed. Please try again with a different PDF.');
@@ -399,13 +401,13 @@ function App() {
               </div>
             </div>
             <div className="trust-badges">
-              <span className="badge secure">🔐 100% Private</span>
-              <span className="badge local">⚡ Client-Side Only</span>
+              <span className="badge secure">🔐 PDFs stay on your device</span>
+              <span className="badge local">⚡ Client-side processing</span>
             </div>
             <div className="upload-main">
               <div className="upload-icon">📄</div>
               <h2>Drop your PDF here</h2>
-              <p className="description">Redact sensitive information without uploading anywhere. Your data stays on your device.</p>
+              <p className="description">Redact sensitive information without uploading your PDF. Your document stays on your device.</p>
               <button
                 type="button"
                 className="primary-button"
@@ -417,7 +419,7 @@ function App() {
             <div className="trust-info">
               <div className="info-item">
                 <span className="check">✓</span>
-                <span>No server uploads</span>
+                <span>Your PDFs are never uploaded</span>
               </div>
               <div className="info-item">
                 <span className="check">✓</span>
@@ -431,6 +433,14 @@ function App() {
                 <span className="check">✓</span>
                 <a className="info-link" href={`${import.meta.env.BASE_URL}privacy.html`}>Privacy policy</a>
               </div>
+              {analyticsConsent && (
+                <div className="info-item">
+                  <span className="check" aria-hidden="true"> </span>
+                  <button type="button" className="toolbar-btn" onClick={manageAnalyticsConsent}>
+                    Analytics settings
+                  </button>
+                </div>
+              )}
             </div>
             {error && <div className="error-message">{error}</div>}
           </div>
@@ -482,6 +492,9 @@ function App() {
           >
             Privacy
           </a>
+          <button type="button" className="toolbar-btn github-link" onClick={manageAnalyticsConsent}>
+            Analytics settings
+          </button>
           <button onClick={resetWorkspace} className="toolbar-btn secondary">New</button>
           <button
             onClick={saveCleanPdf}

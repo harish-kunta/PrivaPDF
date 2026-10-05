@@ -4,7 +4,7 @@ A private, client-side PDF redaction tool that works entirely in your browser. Y
 
 ## Features
 
-- 🔒 **Private & Secure** - PDF processing happens in your browser. PDF data is not sent to any server.
+- 🔒 **Private & Secure** - PDF processing happens in your browser. PDF documents are never uploaded.
 - ⚡ **Fast** - Instant redaction without server uploads or downloads.
 - 🎨 **Easy to Use** - Intuitive interface for redacting sensitive information.
 - 🖱️ **Drag & Drop** - Simply drag and drop your PDF files to get started.
@@ -81,13 +81,25 @@ PrivaPDF/
 - **pdf-lib** - PDF manipulation library
 - **PDF.js** - PDF rendering library
 
+## Configure Cloudflare Web Analytics
+
+Cloudflare Web Analytics is optional and loads only after a visitor accepts the analytics prompt. Without a beacon token, it stays inactive.
+
+1. In the Cloudflare dashboard, open **Web Analytics**, add `https://harish-kunta.github.io/PrivaPDF/`, and create the site beacon. You do not need to move the site or change its DNS to Cloudflare.
+2. In GitHub, open this repository's **Settings → Secrets and variables → Actions → Variables**, then create a repository variable named `VITE_CLOUDFLARE_BEACON_TOKEN` with the token Cloudflare provides. The token is included in the public website bundle, so treat it as a public identifier, not a secret.
+3. Push a commit to `main` or manually run the **Deploy to GitHub Pages** workflow. The build reads that variable and embeds it in the site.
+4. Visit the deployed site, choose **Allow analytics**, then check **Web Analytics** in Cloudflare after traffic has arrived. Visitors who decline are not measured.
+
+For local development, put `VITE_CLOUDFLARE_BEACON_TOKEN=<your-beacon-token>` in `.env.local` (this file is ignored by Git), then restart Vite. Leave it unset to test with analytics off.
+
 ## Privacy
 
 PrivaPDF respects your privacy:
 - No PDF uploads or server-side document processing
 - PDF contents, filenames, text, and redaction coordinates are not collected
-- Optional Firebase Analytics is disabled by default and requires consent
-- Analytics, when enabled, records only general usage events
+- Optional Cloudflare Web Analytics is disabled by default and requires consent
+- When enabled, Cloudflare measures aggregate page-visit traffic; analytics requests may include basic technical request information
+- PDF contents, filenames, text, and redaction coordinates are never sent to the analytics provider
 - All PDF processing is done locally in your browser
 - See the [Privacy Policy](public/privacy.html) for details
 
