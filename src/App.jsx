@@ -42,8 +42,9 @@ function AnalyticsConsentBanner({ onAccept, onDecline }) {
       <div>
         <strong>Help improve PrivaPDF?</strong>
         <p>
-          Optional anonymous usage analytics help us understand visits and feature usage.
-          PDF files, filenames, and document contents are never sent.
+          Optional anonymous visit counts help us understand if PrivaPDF is useful.
+          Your PDF files, filenames, and document contents never leave your device.
+          We use cookie-free Cloudflare Web Analytics — no personal data collected.
         </p>
       </div>
       <div className="analytics-consent-actions">
@@ -392,18 +393,18 @@ function App() {
         <div className={`upload-zone ${isDraggingOver ? 'active' : ''}`}>
           <div className="upload-content">
             <div className="brand-header">
-              <div className="brand-icon">🔒</div>
+              <div className="brand-icon">ð</div>
               <div>
                 <h1>PrivaPDF</h1>
                 <p className="tagline">Redact Privately</p>
               </div>
             </div>
             <div className="trust-badges">
-              <span className="badge secure">🔐 100% Private</span>
-              <span className="badge local">⚡ Client-Side Only</span>
+              <span className="badge secure">ð 100% Private</span>
+              <span className="badge local">â¡ Client-Side Only</span>
             </div>
             <div className="upload-main">
-              <div className="upload-icon">📄</div>
+              <div className="upload-icon">ð</div>
               <h2>Drop your PDF here</h2>
               <p className="description">Redact sensitive information without uploading anywhere. Your data stays on your device.</p>
               <button
@@ -416,15 +417,15 @@ function App() {
             </div>
             <div className="trust-info">
               <div className="info-item">
-                <span className="check">✓</span>
+                <span className="check">â</span>
                 <span>No server uploads</span>
               </div>
               <div className="info-item">
-                <span className="check">✓</span>
+                <span className="check">â</span>
                 <span>No PDF data collection</span>
               </div>
               <div className="info-item">
-                <span className="check">✓</span>
+                <span className="check">â</span>
                 <span>Open source</span>
               </div>
             </div>
@@ -452,16 +453,16 @@ function App() {
     <div className="app-wrapper">
       <div className="header">
         <div className="header-left">
-          <div className="header-logo">🔒</div>
+          <div className="header-logo">ð</div>
           <div className="header-brand">
             <h1>PrivaPDF</h1>
-            <span className="header-badge">secure • private</span>
+            <span className="header-badge">secure â¢ private</span>
           </div>
           <span className="file-name">{pdfName}</span>
         </div>
         <div className="header-center">
-          <button onClick={undo} disabled={!canUndo} className="toolbar-btn" title="Undo">↶</button>
-          <button onClick={redo} disabled={!canRedo} className="toolbar-btn" title="Redo">↷</button>
+          <button onClick={undo} disabled={!canUndo} className="toolbar-btn" title="Undo">â¶</button>
+          <button onClick={redo} disabled={!canRedo} className="toolbar-btn" title="Redo">â·</button>
         </div>
         <div className="header-right">
           <button onClick={resetWorkspace} className="toolbar-btn secondary">New</button>
@@ -537,7 +538,7 @@ function App() {
             <div className="footer-left">
               <span>Page {currentPageIndex + 1} of {pages.length}</span>
               {currentPage?.redactions.some((r) => !r.isPreview) && (
-                <span className="redaction-count">• {currentPage.redactions.filter((r) => !r.isPreview).length} redactions</span>
+                <span className="redaction-count">â¢ {currentPage.redactions.filter((r) => !r.isPreview).length} redactions</span>
               )}
             </div>
             <div className="footer-center">
@@ -546,7 +547,7 @@ function App() {
                 disabled={currentPageIndex === 0}
                 className="nav-btn"
               >
-                ←
+                â
               </button>
               <input
                 type="number"
@@ -566,7 +567,7 @@ function App() {
                 disabled={currentPageIndex === pages.length - 1}
                 className="nav-btn"
               >
-                →
+                â
               </button>
             </div>
             <div className="footer-right">
@@ -575,7 +576,7 @@ function App() {
                 className="nav-btn delete"
                 title="Remove this page"
               >
-                🗑
+                ð
               </button>
             </div>
           </div>

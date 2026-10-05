@@ -4,7 +4,7 @@ A private, client-side PDF redaction tool that works entirely in your browser. Y
 
 ## Features
 
-- 🔒 **Private & Secure** - All processing happens in your browser. No data is sent to any server.
+- 🔒 **Private & Secure** - All PDF processing happens in your browser; your documents never leave your device. Optional analytics counts visits only (cookie-free, no personal data).
 - ⚡ **Fast** - Instant redaction without server uploads or downloads.
 - 🎨 **Easy to Use** - Intuitive interface for redacting sensitive information.
 - 🖱️ **Drag & Drop** - Simply drag and drop your PDF files to get started.
@@ -84,11 +84,9 @@ PrivaPDF/
 ## Privacy
 
 PrivaPDF respects your privacy:
-- No analytics or tracking
-- No server-side processing
-- No data collection
-- All processing is done locally in your browser
-- Your PDFs never leave your device
+- Your PDFs never leave your device — all processing happens locally in your browser
+- No server-side processing, no document data collection
+- Optional, opt-in analytics counts visits only (cookie-free Cloudflare Web Analytics, no personal data)
 
 ## License
 
