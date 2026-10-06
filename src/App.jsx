@@ -43,9 +43,9 @@ const createFlattenedPageImage = async (pageData, pdfPage) => {
   }
 };
 
-function AnalyticsConsentBanner({ onAccept, onDecline }) {
+function AnalyticsConsentBanner({ onAccept, onDecline, className = '' }) {
   return (
-    <aside className="analytics-consent" aria-label="Analytics consent">
+    <aside className={`analytics-consent ${className}`} aria-label="Analytics consent">
       <div>
         <strong>Help improve PrivaPDF?</strong>
         <p>
@@ -76,6 +76,7 @@ function App() {
   ));
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const [processing, setProcessing] = useState(false);
+  const [processingMessage, setProcessingMessage] = useState('');
   const [error, setError] = useState('');
   const [analyticsConsent, setAnalyticsConsent] = useState(() => (
     window.localStorage.getItem('privapdf-cloudflare-analytics-consent')
@@ -94,19 +95,22 @@ function App() {
   useEffect(() => {
     if (analyticsConsent === 'accepted') {
       enableAnalytics();
-    } else if (analyticsConsent === 'declined') {
+    } else {
       disableAnalytics();
     }
   }, [analyticsConsent]);
 
   const updateAnalyticsConsent = (consent) => {
-    window.localStorage.setItem('privapdf-cloudflare-analytics-consent', consent);
+    if (consent) {
+      window.localStorage.setItem('privapdf-cloudflare-analytics-consent', consent);
+    } else {
+      window.localStorage.removeItem('privapdf-cloudflare-analytics-consent');
+    }
     setAnalyticsConsent(consent);
   };
 
   const manageAnalyticsConsent = () => {
-    window.localStorage.removeItem('privapdf-cloudflare-analytics-consent');
-    window.location.reload();
+    updateAnalyticsConsent(null);
   };
 
   const addToHistory = useCallback((newPages) => {
@@ -121,39 +125,38 @@ function App() {
   const renderPdf = async (file) => {
     setError('');
     setProcessing(true);
+    setProcessingMessage('Opening PDF…');
+    let pdf;
 
     try {
       const arrayBuffer = await file.arrayBuffer();
-      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-      const pageData = [];
+      pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+      const loadedPages = [];
 
       for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
-        pageData.push({
-          id: `${pageNumber}-${Date.now()}`,
-          pageNumber,
-          redactions: [],
-        });
-      }
+        setProcessingMessage(`Preparing page ${pageNumber} of ${pdf.numPages}…`);
+        const page = await pdf.getPage(pageNumber);
+        const viewport = page.getViewport({ scale: 1.5 });
+        const canvas = document.createElement('canvas');
+        const context = canvas.getContext('2d');
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
 
-      const loadedPages = await Promise.all(
-        pageData.map(async (pageMeta) => {
-          const page = await pdf.getPage(pageMeta.pageNumber);
-          const viewport = page.getViewport({ scale: 1.5 });
-          const canvas = document.createElement('canvas');
-          const context = canvas.getContext('2d');
-          canvas.width = viewport.width;
-          canvas.height = viewport.height;
+        try {
           await page.render({ canvasContext: context, viewport }).promise;
-          const previewUrl = canvas.toDataURL('image/png');
-
-          return {
-            ...pageMeta,
-            previewUrl,
+          loadedPages.push({
+            id: `${pageNumber}-${Date.now()}`,
+            pageNumber,
+            redactions: [],
+            previewUrl: canvas.toDataURL('image/png'),
             width: viewport.width,
             height: viewport.height,
-          };
-        }),
-      );
+          });
+        } finally {
+          canvas.width = 0;
+          canvas.height = 0;
+        }
+      }
 
       const initialHistory = createHistoryState(loadedPages);
       pageAssetsRef.current = new Map(loadedPages.map((page) => [page.id, {
@@ -171,9 +174,17 @@ function App() {
       setHistoryIndex(initialHistory.index);
     } catch (loadError) {
       console.error(loadError);
-      setError('Could not load this PDF. Please try another file.');
+      if (loadError?.name === 'PasswordException') {
+        setError('This PDF is password-protected. Remove its password and try again.');
+      } else if (loadError?.name === 'InvalidPDFException') {
+        setError('This file could not be read as a PDF. Try another copy of the document.');
+      } else {
+        setError('Could not load this PDF. Please try another file.');
+      }
     } finally {
+      pdf?.destroy();
       setProcessing(false);
+      setProcessingMessage('');
     }
   };
 
@@ -182,6 +193,7 @@ function App() {
     if (!file) return;
     if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
       setError('Please choose a valid PDF file.');
+      event.target.value = '';
       return;
     }
     await renderPdf(file);
@@ -191,6 +203,7 @@ function App() {
   const handleDrop = async (event) => {
     event.preventDefault();
     setIsDraggingOver(false);
+    if (processing) return;
     const file = event.dataTransfer.files?.[0];
     if (!file) return;
     if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
@@ -201,7 +214,7 @@ function App() {
   };
 
   const handleCanvasPointerDown = (event) => {
-    if (!pages.length) return;
+    if (!pages.length || processing) return;
     if (!isDrawingMode) return;
     if (event.pointerType === 'mouse' && event.button !== 0) return;
     event.preventDefault();
@@ -301,6 +314,7 @@ function App() {
   };
 
   const removePage = (pageIndex) => {
+    if (pagesRef.current.length <= 1) return;
     const newPages = pagesRef.current.filter((_, idx) => idx !== pageIndex);
     addToHistory(newPages);
     if (currentPageIndex >= newPages.length) {
@@ -334,7 +348,13 @@ function App() {
       return;
     }
 
+    if (totalRedactions === 0) {
+      setError('Add at least one redaction before exporting.');
+      return;
+    }
+
     setProcessing(true);
+    setProcessingMessage('Preparing export…');
     setError('');
     let renderPdfDocument;
 
@@ -344,6 +364,7 @@ function App() {
       const flattenedPdf = await PDFDocument.create();
 
       for (let index = 0; index < pages.length; index += 1) {
+        setProcessingMessage(`Exporting page ${index + 1} of ${pages.length}…`);
         const pageData = pages[index];
         const renderPage = await renderPdfDocument.getPage(pageData.pageNumber);
         const { width, height } = renderPage.getViewport({ scale: 1 });
@@ -373,17 +394,21 @@ function App() {
       anchor.href = url;
       anchor.download = pdfName ? `${pdfName.replace(/\.pdf$/i, '')}-redacted.pdf` : 'redacted.pdf';
       anchor.click();
-      URL.revokeObjectURL(url);
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (saveError) {
       console.error(saveError);
       setError('The export failed. Please try again with a different PDF.');
     } finally {
       renderPdfDocument?.destroy();
       setProcessing(false);
+      setProcessingMessage('');
     }
   };
 
   const resetWorkspace = () => {
+    if (historyIndex > 0 && !window.confirm('Start a new PDF? Your current document changes and redactions will be lost.')) {
+      return;
+    }
     pagesRef.current = [];
     pageAssetsRef.current.clear();
     historyRef.current = { entries: [], index: -1 };
@@ -400,6 +425,7 @@ function App() {
   };
 
   const currentPage = pages[currentPageIndex];
+  const isTouchDevice = window.matchMedia('(pointer: coarse)').matches;
   const totalRedactions = pages.reduce((sum, p) => sum + p.redactions.filter((r) => !r.isPreview).length, 0);
   const canUndo = historyIndex > 0;
   const canRedo = historyIndex < history.length - 1;
@@ -435,10 +461,12 @@ function App() {
               <button
                 type="button"
                 className="primary-button"
+                disabled={processing}
                 onClick={() => fileInputRef.current?.click()}
               >
-                Select a PDF
+                {processing ? 'Preparing PDF…' : 'Select a PDF'}
               </button>
+              {processing && <p className="processing-status" role="status" aria-live="polite">{processingMessage}</p>}
             </div>
             <div className="trust-info">
               <div className="info-item">
@@ -466,7 +494,7 @@ function App() {
                 </div>
               )}
             </div>
-            {error && <div className="error-message">{error}</div>}
+            {error && <div className="error-message" role="alert">{error}</div>}
           </div>
           <input
             ref={fileInputRef}
@@ -498,8 +526,8 @@ function App() {
           <span className="file-name">{pdfName}</span>
         </div>
         <div className="header-center">
-          <button onClick={undo} disabled={!canUndo} className="toolbar-btn" title="Undo">↶</button>
-          <button onClick={redo} disabled={!canRedo} className="toolbar-btn" title="Redo">↷</button>
+          <button onClick={undo} disabled={processing || !canUndo} className="toolbar-btn" title="Undo" aria-label="Undo last change">↶</button>
+          <button onClick={redo} disabled={processing || !canRedo} className="toolbar-btn" title="Redo" aria-label="Redo last change">↷</button>
         </div>
         <div className="header-right">
           <a
@@ -519,15 +547,19 @@ function App() {
           <button type="button" className="toolbar-btn github-link" onClick={manageAnalyticsConsent}>
             Analytics settings
           </button>
-          <button onClick={resetWorkspace} className="toolbar-btn secondary">New</button>
+          <button onClick={resetWorkspace} disabled={processing} className="toolbar-btn secondary">New</button>
           <button
             onClick={saveCleanPdf}
-            disabled={processing}
+            disabled={processing || totalRedactions === 0}
             className="toolbar-btn primary"
-            title="Creates a flattened PDF with redactions baked into the page images"
+            title={totalRedactions === 0
+              ? 'Add at least one redaction to enable export'
+              : 'Exports image-only pages; text search, selection, and links are not preserved'}
+            aria-describedby="export-help"
           >
-            {processing ? 'Exporting...' : 'Export Flattened PDF'}
+            {processing ? 'Exporting…' : totalRedactions === 0 ? 'Add redactions to export' : 'Export Image-only PDF'}
           </button>
+          <span id="export-help" className="sr-only">Export creates image-only pages. Text search, selection, and links will not be preserved.</span>
         </div>
       </div>
 
@@ -540,8 +572,13 @@ function App() {
                 key={page.id}
                 className={`thumbnail ${idx === currentPageIndex ? 'active' : ''}`}
                 onClick={() => setCurrentPageIndex(idx)}
+                disabled={processing}
+                aria-label={`Go to page ${idx + 1}${page.redactions.filter((r) => !r.isPreview).length
+                  ? `, ${page.redactions.filter((r) => !r.isPreview).length} redactions`
+                  : ', no redactions'}`}
+                aria-current={idx === currentPageIndex ? 'page' : undefined}
               >
-                <img src={page.previewUrl} alt={`Page ${idx + 1}`} />
+                <img src={page.previewUrl} alt="" />
                 <div className="page-number">{idx + 1}</div>
                 {page.redactions.some((r) => !r.isPreview) && (
                   <div className="redaction-badge">{page.redactions.filter((r) => !r.isPreview).length}</div>
@@ -570,7 +607,8 @@ function App() {
                 />
                 <div className="redactions-canvas">
                   {currentPage.redactions.map((box) => (
-                    <div
+                    <button
+                      type="button"
                       key={box.id}
                       className={`redaction ${box.isPreview ? 'preview' : ''}`}
                       style={{
@@ -580,7 +618,11 @@ function App() {
                         height: `${box.height}%`,
                       }}
                       onClick={() => !box.isPreview && removeRedaction(box.id)}
-                      title={box.isPreview ? '' : 'Click to remove'}
+                      disabled={processing || box.isPreview}
+                      aria-label={box.isPreview ? 'Redaction preview' : `Remove redaction ${currentPage.redactions
+                        .filter((r) => !r.isPreview)
+                        .findIndex((redaction) => redaction.id === box.id) + 1}`}
+                      title={box.isPreview ? '' : 'Click to remove this redaction'}
                     />
                   ))}
                 </div>
@@ -598,8 +640,9 @@ function App() {
             <div className="footer-center">
               <button
                 onClick={() => setCurrentPageIndex(Math.max(0, currentPageIndex - 1))}
-                disabled={currentPageIndex === 0}
+                disabled={processing || currentPageIndex === 0}
                 className="nav-btn"
+                aria-label="Previous page"
               >
                 ←
               </button>
@@ -615,22 +658,29 @@ function App() {
                 min="1"
                 max={pages.length}
                 className="page-input"
+                aria-label={`Current page, from 1 to ${pages.length}`}
+                disabled={processing}
               />
               <button
                 onClick={() => setCurrentPageIndex(Math.min(pages.length - 1, currentPageIndex + 1))}
-                disabled={currentPageIndex === pages.length - 1}
+                disabled={processing || currentPageIndex === pages.length - 1}
                 className="nav-btn"
+                aria-label="Next page"
               >
                 →
               </button>
             </div>
             <div className="footer-right">
+              {isTouchDevice && !isDrawingMode && (
+                <span className="touch-hint">Tap “Draw redactions” to mark an area.</span>
+              )}
               <button
+                onClick={() => setIsDrawingMode((enabled) => !enabled)}
                 type="button"
                 className={`toolbar-btn ${isDrawingMode ? 'primary' : ''}`}
                 aria-pressed={isDrawingMode}
                 aria-label={isDrawingMode ? 'Exit redaction drawing mode' : 'Enable redaction drawing mode'}
-                onClick={() => setIsDrawingMode((enabled) => !enabled)}
+                disabled={processing}
               >
                 {isDrawingMode ? 'Done drawing' : 'Draw redactions'}
               </button>
@@ -638,15 +688,20 @@ function App() {
                 onClick={() => removePage(currentPageIndex)}
                 className="nav-btn delete"
                 title="Remove this page"
+                aria-label={`Remove page ${currentPageIndex + 1}`}
+                aria-describedby={pages.length <= 1 ? 'last-page-help' : undefined}
+                disabled={processing || pages.length <= 1}
               >
                 🗑
               </button>
+              {pages.length <= 1 && <span id="last-page-help" className="sr-only">A document must keep at least one page.</span>}
             </div>
           </div>
         </div>
       </div>
 
-      {error && <div className="error-bar">{error}</div>}
+      {processing && <div className="processing-status editor-processing" role="status" aria-live="polite">{processingMessage}</div>}
+      {error && <div className="error-bar" role="alert">{error}</div>}
 
       <input
         ref={fileInputRef}
@@ -657,6 +712,7 @@ function App() {
       />
       {!analyticsConsent && (
         <AnalyticsConsentBanner
+          className="editor-consent"
           onAccept={() => updateAnalyticsConsent('accepted')}
           onDecline={() => updateAnalyticsConsent('declined')}
         />
