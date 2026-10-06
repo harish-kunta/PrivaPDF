@@ -723,7 +723,20 @@ input:focus-visible {
   font-size: 13px;
 }
 
+.processing-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 .editor-processing {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  flex-wrap: wrap;
   padding: 6px 12px;
   background: var(--bg-secondary);
   border-top: 1px solid var(--border);

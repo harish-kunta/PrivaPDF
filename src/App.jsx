@@ -1,6 +1,4 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { PDFDocument } from 'pdf-lib';
-import * as pdfjsLib from 'pdfjs-dist';
 import { disableAnalytics, enableAnalytics } from './analytics';
 import {
   appendHistory,
@@ -8,12 +6,7 @@ import {
   moveHistory,
 } from './history';
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-  'pdfjs-dist/build/pdf.worker.min.mjs',
-  import.meta.url,
-).toString();
-
-const createFlattenedPageImage = async (pageData, pdfPage) => {
+const createFlattenedPageImage = async (pageData, pdfPage, onRenderTask) => {
   const viewport = pdfPage.getViewport({ scale: 3 });
   const canvas = document.createElement('canvas');
   const context = canvas.getContext('2d');
@@ -21,7 +14,9 @@ const createFlattenedPageImage = async (pageData, pdfPage) => {
   canvas.height = Math.ceil(viewport.height);
 
   try {
-    await pdfPage.render({ canvasContext: context, viewport }).promise;
+    const renderTask = pdfPage.render({ canvasContext: context, viewport });
+    onRenderTask(renderTask);
+    await renderTask.promise;
     context.fillStyle = '#000000';
     pageData.redactions
       .filter((redaction) => !redaction.isPreview)
@@ -62,11 +57,27 @@ function AnalyticsConsentBanner({ onAccept, onDecline, className = '' }) {
   );
 }
 
+const canvasToObjectUrl = (canvas, type = 'image/png', quality) => new Promise((resolve, reject) => {
+  canvas.toBlob((blob) => {
+    if (!blob) {
+      reject(new Error('Could not create a PDF page preview.'));
+      return;
+    }
+    resolve(URL.createObjectURL(blob));
+  }, type, quality);
+});
+
 function App() {
   const fileInputRef = useRef(null);
   const pagesRef = useRef([]);
   const pageAssetsRef = useRef(new Map());
   const historyRef = useRef({ entries: [], index: -1 });
+  const pdfDocumentRef = useRef(null);
+  const pagePreviewUrlRef = useRef(null);
+  const activePageRenderTaskRef = useRef(null);
+  const activeLoadingTaskRef = useRef(null);
+  const cancelRequestedRef = useRef(false);
+  const [currentPagePreviewUrl, setCurrentPagePreviewUrl] = useState(null);
   const [pdfFile, setPdfFile] = useState(null);
   const [pdfName, setPdfName] = useState('');
   const [pages, setPages] = useState([]);
@@ -84,13 +95,71 @@ function App() {
   const [history, setHistory] = useState([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
 
+  useEffect(() => () => {
+    pdfDocumentRef.current?.destroy();
+    pageAssetsRef.current.forEach((asset) => URL.revokeObjectURL(asset.previewUrl));
+    if (pagePreviewUrlRef.current) URL.revokeObjectURL(pagePreviewUrlRef.current);
+  }, []);
+
   useEffect(() => {
-    return () => {
-      if (pdfFile?.url) {
-        URL.revokeObjectURL(pdfFile.url);
+    const page = pages[currentPageIndex];
+    const pdf = pdfDocumentRef.current;
+    if (!page || !pdf || !pdfFile) return undefined;
+
+    let cancelled = false;
+    let canvas;
+    let renderTask;
+    setCurrentPagePreviewUrl(page.previewUrl);
+
+    const renderFullPage = async () => {
+      try {
+        const pdfPage = await pdf.getPage(page.pageNumber);
+        if (cancelled) return;
+        const baseViewport = pdfPage.getViewport({ scale: 1 });
+        const scale = Math.min(1.5, 1200 / baseViewport.width);
+        const viewport = pdfPage.getViewport({ scale });
+        canvas = document.createElement('canvas');
+        const context = canvas.getContext('2d');
+        canvas.width = Math.ceil(viewport.width);
+        canvas.height = Math.ceil(viewport.height);
+
+        renderTask = pdfPage.render({ canvasContext: context, viewport });
+        activePageRenderTaskRef.current = renderTask;
+        await renderTask.promise;
+        if (cancelled) return;
+
+        const previewUrl = await canvasToObjectUrl(canvas);
+        if (cancelled) {
+          URL.revokeObjectURL(previewUrl);
+          return;
+        }
+
+        if (pagePreviewUrlRef.current) URL.revokeObjectURL(pagePreviewUrlRef.current);
+        pagePreviewUrlRef.current = previewUrl;
+        setCurrentPagePreviewUrl(previewUrl);
+      } catch (renderError) {
+        if (!cancelled && renderError?.name !== 'RenderingCancelledException') {
+          setError('Could not render this page. Try selecting it again.');
+        }
+      } finally {
+        if (canvas) {
+          canvas.width = 0;
+          canvas.height = 0;
+        }
+        if (activePageRenderTaskRef.current === renderTask) activePageRenderTaskRef.current = null;
       }
     };
-  }, [pdfFile]);
+
+    renderFullPage();
+    return () => {
+      cancelled = true;
+      activePageRenderTaskRef.current?.cancel();
+      if (pagePreviewUrlRef.current) {
+        URL.revokeObjectURL(pagePreviewUrlRef.current);
+        pagePreviewUrlRef.current = null;
+      }
+    };
+  }, [currentPageIndex, pages[currentPageIndex]?.id, pdfFile]);
 
   useEffect(() => {
     if (analyticsConsent === 'accepted') {
@@ -127,28 +196,48 @@ function App() {
     setProcessing(true);
     setProcessingMessage('Opening PDF…');
     let pdf;
+    const thumbnailUrls = [];
+    let keepDocument = false;
+    cancelRequestedRef.current = false;
 
     try {
+      const pdfjsLib = await import('pdfjs-dist');
+      pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+        'pdfjs-dist/build/pdf.worker.min.mjs',
+        import.meta.url,
+      ).toString();
       const arrayBuffer = await file.arrayBuffer();
-      pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+      if (cancelRequestedRef.current) throw new DOMException('Operation cancelled', 'AbortError');
+      const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+      activeLoadingTaskRef.current = loadingTask;
+      pdf = await loadingTask.promise;
+      activeLoadingTaskRef.current = null;
       const loadedPages = [];
 
       for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+        if (cancelRequestedRef.current) throw new DOMException('Operation cancelled', 'AbortError');
         setProcessingMessage(`Preparing page ${pageNumber} of ${pdf.numPages}…`);
         const page = await pdf.getPage(pageNumber);
-        const viewport = page.getViewport({ scale: 1.5 });
+        const baseViewport = page.getViewport({ scale: 1 });
+        const scale = Math.min(0.35, 180 / baseViewport.width);
+        const viewport = page.getViewport({ scale });
         const canvas = document.createElement('canvas');
         const context = canvas.getContext('2d');
-        canvas.width = viewport.width;
-        canvas.height = viewport.height;
+        canvas.width = Math.ceil(viewport.width);
+        canvas.height = Math.ceil(viewport.height);
 
         try {
-          await page.render({ canvasContext: context, viewport }).promise;
+          const renderTask = page.render({ canvasContext: context, viewport });
+          activePageRenderTaskRef.current = renderTask;
+          await renderTask.promise;
+          if (activePageRenderTaskRef.current === renderTask) activePageRenderTaskRef.current = null;
+          const previewUrl = await canvasToObjectUrl(canvas, 'image/jpeg', 0.78);
+          thumbnailUrls.push(previewUrl);
           loadedPages.push({
             id: `${pageNumber}-${Date.now()}`,
             pageNumber,
             redactions: [],
-            previewUrl: canvas.toDataURL('image/png'),
+            previewUrl,
             width: viewport.width,
             height: viewport.height,
           });
@@ -166,23 +255,33 @@ function App() {
       }]));
       pagesRef.current = loadedPages;
       historyRef.current = initialHistory;
+      if (cancelRequestedRef.current) throw new DOMException('Operation cancelled', 'AbortError');
+      pdfDocumentRef.current?.destroy();
+      pdfDocumentRef.current = pdf;
+      keepDocument = true;
       setPages(loadedPages);
-      setPdfFile({ file, url: URL.createObjectURL(file) });
+      setPdfFile({ file });
       setPdfName(file.name);
       setCurrentPageIndex(0);
       setHistory(initialHistory.entries);
       setHistoryIndex(initialHistory.index);
     } catch (loadError) {
-      console.error(loadError);
-      if (loadError?.name === 'PasswordException') {
+      thumbnailUrls.forEach((url) => URL.revokeObjectURL(url));
+      if (loadError?.name === 'AbortError' || cancelRequestedRef.current) {
+        // Cancellation is intentional; keep the upload screen ready for another file.
+      } else if (loadError?.name === 'PasswordException') {
         setError('This PDF is password-protected. Remove its password and try again.');
       } else if (loadError?.name === 'InvalidPDFException') {
         setError('This file could not be read as a PDF. Try another copy of the document.');
       } else {
+        console.error(loadError);
         setError('Could not load this PDF. Please try another file.');
       }
     } finally {
-      pdf?.destroy();
+      if (!keepDocument) pdf?.destroy();
+      activeLoadingTaskRef.current = null;
+      activePageRenderTaskRef.current = null;
+      cancelRequestedRef.current = false;
       setProcessing(false);
       setProcessingMessage('');
     }
@@ -356,19 +455,24 @@ function App() {
     setProcessing(true);
     setProcessingMessage('Preparing export…');
     setError('');
-    let renderPdfDocument;
+    cancelRequestedRef.current = false;
+    const renderPdfDocument = pdfDocumentRef.current;
 
     try {
-      const inputBytes = await pdfFile.file.arrayBuffer();
-      renderPdfDocument = await pdfjsLib.getDocument({ data: inputBytes.slice(0) }).promise;
+      if (!renderPdfDocument) throw new Error('The source PDF is no longer available.');
+      const { PDFDocument } = await import('pdf-lib');
       const flattenedPdf = await PDFDocument.create();
 
       for (let index = 0; index < pages.length; index += 1) {
+        if (cancelRequestedRef.current) throw new DOMException('Operation cancelled', 'AbortError');
         setProcessingMessage(`Exporting page ${index + 1} of ${pages.length}…`);
         const pageData = pages[index];
         const renderPage = await renderPdfDocument.getPage(pageData.pageNumber);
         const { width, height } = renderPage.getViewport({ scale: 1 });
-        const flattenedImage = await createFlattenedPageImage(pageData, renderPage);
+        const flattenedImage = await createFlattenedPageImage(pageData, renderPage, (task) => {
+          activePageRenderTaskRef.current = task;
+        });
+        activePageRenderTaskRef.current = null;
         const image = await flattenedPdf.embedPng(flattenedImage);
         const page = flattenedPdf.addPage([width, height]);
 
@@ -379,6 +483,8 @@ function App() {
           height,
         });
       }
+
+      if (cancelRequestedRef.current) throw new DOMException('Operation cancelled', 'AbortError');
 
       flattenedPdf.setTitle('');
       flattenedPdf.setAuthor('');
@@ -396,13 +502,22 @@ function App() {
       anchor.click();
       window.setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (saveError) {
-      console.error(saveError);
-      setError('The export failed. Please try again with a different PDF.');
+      if (saveError?.name !== 'AbortError' && !cancelRequestedRef.current) {
+        console.error(saveError);
+        setError('The export failed. Please try again with a different PDF.');
+      }
     } finally {
-      renderPdfDocument?.destroy();
+      activePageRenderTaskRef.current = null;
+      cancelRequestedRef.current = false;
       setProcessing(false);
       setProcessingMessage('');
     }
+  };
+
+  const cancelProcessing = () => {
+    cancelRequestedRef.current = true;
+    activePageRenderTaskRef.current?.cancel();
+    activeLoadingTaskRef.current?.destroy();
   };
 
   const resetWorkspace = () => {
@@ -410,7 +525,13 @@ function App() {
       return;
     }
     pagesRef.current = [];
+    pageAssetsRef.current.forEach((asset) => URL.revokeObjectURL(asset.previewUrl));
     pageAssetsRef.current.clear();
+    pdfDocumentRef.current?.destroy();
+    pdfDocumentRef.current = null;
+    if (pagePreviewUrlRef.current) URL.revokeObjectURL(pagePreviewUrlRef.current);
+    pagePreviewUrlRef.current = null;
+    setCurrentPagePreviewUrl(null);
     historyRef.current = { entries: [], index: -1 };
     setPdfFile(null);
     setPdfName('');
@@ -442,7 +563,7 @@ function App() {
         onDrop={handleDrop}
       >
         <div className={`upload-zone ${isDraggingOver ? 'active' : ''}`}>
-          <div className="upload-content">
+          <main className="upload-content">
             <div className="brand-header">
               <div className="brand-icon">🔒</div>
               <div>
@@ -466,7 +587,12 @@ function App() {
               >
                 {processing ? 'Preparing PDF…' : 'Select a PDF'}
               </button>
-              {processing && <p className="processing-status" role="status" aria-live="polite">{processingMessage}</p>}
+              {processing && (
+                <div className="processing-controls">
+                  <p className="processing-status" role="status" aria-live="polite">{processingMessage}</p>
+                  <button type="button" className="toolbar-btn" onClick={cancelProcessing}>Cancel</button>
+                </div>
+              )}
             </div>
             <div className="trust-info">
               <div className="info-item">
@@ -495,7 +621,7 @@ function App() {
               )}
             </div>
             {error && <div className="error-message" role="alert">{error}</div>}
-          </div>
+          </main>
           <input
             ref={fileInputRef}
             className="hidden-file-input"
@@ -516,7 +642,7 @@ function App() {
 
   return (
     <div className="app-wrapper">
-      <div className="header">
+      <header className="header">
         <div className="header-left">
           <div className="header-logo">🔒</div>
           <div className="header-brand">
@@ -561,10 +687,10 @@ function App() {
           </button>
           <span id="export-help" className="sr-only">Export creates image-only pages. Text search, selection, and links will not be preserved.</span>
         </div>
-      </div>
+      </header>
 
-      <div className="content-area">
-        <div className="sidebar">
+      <main className="content-area">
+        <nav className="sidebar" aria-label="PDF pages">
           <div className="sidebar-title">Pages ({pages.length})</div>
           <div className="thumbnails-list">
             {pages.map((page, idx) => (
@@ -592,14 +718,14 @@ function App() {
               <span className="stat-value">{totalRedactions}</span>
             </div>
           </div>
-        </div>
+        </nav>
 
-        <div className="main-content">
+        <section className="main-content" aria-label="Document editor">
           <div className="canvas-area">
             {currentPage && (
               <div className="pdf-page-container">
                 <img
-                  src={currentPage.previewUrl}
+                  src={currentPagePreviewUrl || currentPage.previewUrl}
                   alt={`Page ${currentPageIndex + 1}`}
                   className={`pdf-image ${isDrawingMode ? 'drawing-enabled' : ''}`}
                   onPointerDown={handleCanvasPointerDown}
@@ -697,10 +823,15 @@ function App() {
               {pages.length <= 1 && <span id="last-page-help" className="sr-only">A document must keep at least one page.</span>}
             </div>
           </div>
-        </div>
-      </div>
+        </section>
+      </main>
 
-      {processing && <div className="processing-status editor-processing" role="status" aria-live="polite">{processingMessage}</div>}
+      {processing && (
+        <div className="processing-status editor-processing" role="status" aria-live="polite">
+          {processingMessage}
+          <button type="button" className="toolbar-btn" onClick={cancelProcessing}>Cancel</button>
+        </div>
+      )}
       {error && <div className="error-bar" role="alert">{error}</div>}
 
       <input
