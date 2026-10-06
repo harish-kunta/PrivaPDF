@@ -651,9 +651,33 @@ function App() {
           </div>
           <span className="file-name">{pdfName}</span>
         </div>
-        <div className="header-center">
-          <button onClick={undo} disabled={processing || !canUndo} className="toolbar-btn" title="Undo" aria-label="Undo last change">↶</button>
-          <button onClick={redo} disabled={processing || !canRedo} className="toolbar-btn" title="Redo" aria-label="Redo last change">↷</button>
+        <div className="header-center history-controls" role="group" aria-label="Edit history">
+          <button
+            type="button"
+            onClick={undo}
+            disabled={processing || !canUndo}
+            className="history-button"
+            title="Undo"
+            aria-label="Undo last change"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M9 14 4 9l5-5" />
+              <path d="M4 9h9a7 7 0 0 1 0 14h-2" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            onClick={redo}
+            disabled={processing || !canRedo}
+            className="history-button"
+            title="Redo"
+            aria-label="Redo last change"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="m15 14 5-5-5-5" />
+              <path d="M20 9h-9a7 7 0 0 0 0 14h2" />
+            </svg>
+          </button>
         </div>
         <div className="header-right">
           <a
